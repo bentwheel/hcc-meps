@@ -124,27 +124,6 @@ cond_datasets_proc <- cond_datasets %>%
 fyc_data_proc <- fyc_data_proc %>% 
   anti_join(censored_code_individuals)
 
-# For this next step, we need to crosswalk CCSR IDs to each record, as this
-# will help us stochastically "complete" the ICD-10-CM codes to full values.
-# To do this, we need to populate the etc/AHRQ_CCSR_MAPS with AHRQ's
-# CCSR mapping files, which you can download here:
-# https://hcup-us.ahrq.gov/toolssoftware/ccsr/ccsr_archive.jsp#ccsr
-
-# Note that the CCSR crossmaps come in different versions. The MEPS documentation
-# for each CONDITIONS file specifies the version of CCSR to apply to which year.
-# In some cases, the MEPS team applied later versions of CCSR maps retroactively
-# to ensure consistency. Here are the CCSR versions you will need to download,
-# unzip, and place in this folder (exactly as named):
-
-# Data Year | CCSR Version (Expected Filename)
-# --------------------------------------------
-#  2016     | v2019.1 (DXCCSR2019_1.CSV)
-#  2017     | v2019.1 (DXCCSR2019_1.CSV)
-#  2018     | v2019.1 (DXCCSR2019_1.CSV)
-#  2019     | v2020.3 (DXCCSR_v2020-3.CSV)
-#  2020     | v2021.2 (DXCCSR_v2021-2.csv)
-#  2021     | v2022.1 (DXCCSR_v2022-1.CSV)
-
 # Replace all "-1" values in CCSR fields with NAs
 cond_datasets_proc <- cond_datasets_proc %>% 
   mutate(
@@ -152,100 +131,11 @@ cond_datasets_proc <- cond_datasets_proc %>%
     CCSR2X = if_else(CCSR2X == "-1", NA_character_, CCSR2X),
     CCSR3X = if_else(CCSR3X == "-1", NA_character_, CCSR3X))
 
-# Now let's read in all the CCSR crossmaps and apply them to our 
-# 2016 - 2021 conditions dataset.
-
-icd10_ccsr3_map <- NULL
-
-# Parse v2019.1 CCSR
-input <- str_replace_all(read_file("./etc/ahrq_ccsr_maps/DXCCSR2019_1.CSV"), "\'", "")
-icd10_ccsr_map_2019.1 <- read_csv(input, guess_max = 60000) 
-
-icd10_ccsr3_map_2019.1 <- icd10_ccsr_map_2019.1 %>% 
-  select(ICD10CM = `ICD-10-CM CODE`,
-         ICD10_DSC = `ICD-10-CM CODE DESCRIPTION`,
-         CCSR1X = `CCSR CATEGORY 1`,
-         CCSR1X_DSC = `CCSR CATEGORY 1 DESCRIPTION`,
-         CCSR2X = `CCSR CATEGORY 2`,
-         CCSR2X_DSC = `CCSR CATEGORY 2 DESCRIPTION`,
-         CCSR3X = `CCSR CATEGORY 3`,
-         CCSR3X_DSC = `CCSR CATEGORY 3 DESCRIPTION`)
-
-# Apply this crosswalk to meps years 2016 - 2018
-icd10_ccsr3_map <- list(meps_year = c("2016", "2017", "2018")) %>% 
-  as_tibble() %>% 
-  cross_join(icd10_ccsr3_map_2019.1)
-
-# Tidy up
-rm(icd10_ccsr_map_2019.1)
-rm(icd10_ccsr3_map_2019.1)
-
-# Parse v2020.3 CCSR and apply to year 2019
-input <- str_replace_all(read_file("./etc/ahrq_ccsr_maps/DXCCSR_v2020-3.CSV"), "\'", "")
-icd10_ccsr_map_2020.3 <- read_csv(input, guess_max = 60000) 
-
-icd10_ccsr3_map_2020.3 <- icd10_ccsr_map_2020.3 %>% 
-  select(ICD10CM = `ICD-10-CM CODE`,
-         ICD10_DSC = `ICD-10-CM CODE DESCRIPTION`,
-         CCSR1X = `CCSR CATEGORY 1`,
-         CCSR1X_DSC = `CCSR CATEGORY 1 DESCRIPTION`,
-         CCSR2X = `CCSR CATEGORY 2`,
-         CCSR2X_DSC = `CCSR CATEGORY 2 DESCRIPTION`,
-         CCSR3X = `CCSR CATEGORY 3`,
-         CCSR3X_DSC = `CCSR CATEGORY 3 DESCRIPTION`) %>% 
-  mutate(meps_year = "2019")
-
-icd10_ccsr3_map <- icd10_ccsr3_map %>% 
-  union_all(icd10_ccsr3_map_2020.3)
-
-# Tidy up
-rm(icd10_ccsr_map_2020.3)
-rm(icd10_ccsr3_map_2020.3)
-
-# Parse v2021.2 CCSR, apply to year 2020
-input <- str_replace_all(read_file("./etc/ahrq_ccsr_maps/DXCCSR_v2021-2.csv"), "\'", "")
-icd10_ccsr_map_2021.2 <- read_csv(input, guess_max = 60000) 
-
-icd10_ccsr3_map_2021.2 <- icd10_ccsr_map_2021.2 %>% 
-  select(ICD10CM = `ICD-10-CM CODE`,
-         ICD10_DSC = `ICD-10-CM CODE DESCRIPTION`,
-         CCSR1X = `CCSR CATEGORY 1`,
-         CCSR1X_DSC = `CCSR CATEGORY 1 DESCRIPTION`,
-         CCSR2X = `CCSR CATEGORY 2`,
-         CCSR2X_DSC = `CCSR CATEGORY 2 DESCRIPTION`,
-         CCSR3X = `CCSR CATEGORY 3`,
-         CCSR3X_DSC = `CCSR CATEGORY 3 DESCRIPTION`) %>% 
-  mutate(meps_year = "2020")
-
-icd10_ccsr3_map <- icd10_ccsr3_map %>% 
-  union_all(icd10_ccsr3_map_2021.2)
-
-# Tidy up
-rm(icd10_ccsr_map_2021.2)
-rm(icd10_ccsr3_map_2021.2)
-
-# Parse v2022.1 CCSR 
-input <- str_replace_all(read_file("./etc/ahrq_ccsr_maps/DXCCSR_v2022-1.CSV"), "\'", "")
-icd10_ccsr_map_2022.1 <- read_csv(input, guess_max = 60000) 
-
-icd10_ccsr3_map_2022.1 <- icd10_ccsr_map_2022.1 %>% 
-  select(ICD10CM = `ICD-10-CM CODE`,
-         ICD10_DSC = `ICD-10-CM CODE DESCRIPTION`,
-         CCSR1X = `CCSR CATEGORY 1`,
-         CCSR1X_DSC = `CCSR CATEGORY 1 DESCRIPTION`,
-         CCSR2X = `CCSR CATEGORY 2`,
-         CCSR2X_DSC = `CCSR CATEGORY 2 DESCRIPTION`,
-         CCSR3X = `CCSR CATEGORY 3`,
-         CCSR3X_DSC = `CCSR CATEGORY 3 DESCRIPTION`) %>% 
-  mutate(meps_year = "2021")
-
-icd10_ccsr3_map <- icd10_ccsr3_map %>% 
-  union_all(icd10_ccsr3_map_2022.1)
-
-# Tidy up
-rm(icd10_ccsr_map_2022.1)
-rm(icd10_ccsr3_map_2022.1)
-gc()
+# We will next build the AHRQ CCSR mapping from ICD10CM codes to CCSR Categories.
+# This is done in the source file "src/ahrq-ccsr-prep.R".
+source("./src/ahrq-ccsr-prep.R")
+icd10_ccsr3_map <- read_csv("./etc/ahrq_ccsr_maps/icd10_ccsr3_map.csv") %>% 
+  mutate(meps_year = as.character(meps_year))
 
 # NOW we have a complete mapping for all years (2016 - 2021) of ICD10CM codes
 # to CCSR codes and descriptions. Now we have to handle the matter of the missing
@@ -257,4 +147,140 @@ gc()
 # events. Using these frequency tables, we can form a distribution of complete
 # ICD-10-CM codes based on the truncated codes in MEPS plus the ICD-10-CM code.
 
+source("./src/icd10-freq-prep.R")
+ca_icd10_freqs <- read_csv("./etc/icd10_freq_tables/icd10_freqs.csv") %>% 
+  mutate(meps_year = as.character(meps_year))
 
+# Now we'll combine the icd10-cm frequency data with our conditions file
+conds_w_freqs <- cond_datasets_proc %>% 
+  left_join(ca_icd10_freqs) %>% 
+  inner_join(icd10_ccsr3_map) %>% 
+  group_by(DUPERSID, CONDN, ICD10CDX, CCSR1X, CCSR2X, CCSR3X, meps_year) %>% 
+  mutate(ed_pct = ed_freq / sum(ed_freq),
+         ip_pct = ip_freq / sum(ip_freq),
+         op_pct = op_freq / sum(op_freq),
+         total_pct = total_freq / sum(total_freq)) %>% 
+  ungroup() %>% 
+  mutate(
+    use_pct = case_when(
+      ERCOND == 1 ~ ed_pct,
+      IPCOND == 1 ~ ip_pct,
+      OPCOND == 1 ~ op_pct,
+      .default = total_pct
+    )) %>% 
+  select(DUPERSID, meps_year, ICD10CDX, ICD10CM, use_pct) 
+
+# Next we will pick a number of simulations to run relative to the size
+# of the sample weighting assigned to the MEPS respondent.
+# This means n draws
+# for how each 3-digit ICD code is completed based on our frequency distr.
+
+# Get sample weights and rescale - this will inform the number of trials
+meps_weights <- fyc_data_proc %>% 
+  select(DUPERSID, meps_year, PERWTYYF) %>% 
+  mutate(POOLWTYYF = PERWTYYF / 6) %>% 
+  select(-PERWTYYF)
+
+# Perform 1 million trials of different 
+ipw_scaler <- 1e6/sum(meps_weights$POOLWTYYF)
+
+prof_generator <- function(data, trials) {
+  trials_out <- list(trial = 1:trials) %>% 
+    as_tibble() %>% 
+    cross_join(data) %>% 
+    group_by(trial, ICD10CDX) %>% 
+    mutate(
+      rand = runif(1, min=0, max=1),
+      cpd = cumsum(use_pct),
+      lag_cpd = lag(cpd),
+      cpd_lo = if_else(is.na(lag_cpd), 0, lag_cpd),
+      cpd_hi = cpd,
+      selected = between(rand, cpd_lo, cpd_hi)) %>% 
+    ungroup() %>% 
+    filter(selected) %>% 
+    group_by(trial) %>% 
+    summarize(profile = list(ICD10CM)) %>% 
+    ungroup() %>% 
+    group_by(profile) %>% 
+    summarize(freq = n()) %>% 
+    ungroup()
+  
+  trials_out
+}
+
+# Finally assemble all ICD-10-CM code lists, and give a frequency distribution
+# for each individual to determine how many unique ICD-10-CM profiles to run
+
+consolidated_conds_probs <- conds_w_freqs %>% 
+  group_by(DUPERSID, meps_year) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  left_join(meps_weights) %>% 
+  filter(POOLWTYYF > 0) %>% 
+  mutate(trials = ceiling(POOLWTYYF * ipw_scaler)) %>% 
+  mutate(results = map2(data, trials, prof_generator, .progress=T)) %>% 
+  select(DUPERSID, meps_year, results) %>% 
+  unnest(results)
+
+#### DRUGS!
+
+# Drugs should be pretty easy, we just need a list of NDCs for each individual.
+
+# First, let's fetch the necessary data from MEPS.
+
+rx_datasets <- NULL
+
+for (year in meps_years$meps_year)
+{
+  select_variables <- c("DUPERSID", "RXNDC")
+  
+  rx_data <- MEPS::read_MEPS(type = "RX", year=year) %>% 
+    select(all_of(select_variables)) %>% 
+    mutate(meps_year = year)
+  
+  rx_datasets <- rx_datasets %>% 
+    union_all(rx_data)
+}
+
+# Now, let's go through and identify any respondents who have been censored, so we can remove them
+# from this exercise.
+
+censored_rx_individuals <- rx_datasets %>% 
+  filter(RXNDC < 0) %>% 
+  distinct(DUPERSID, meps_year) 
+
+# Remove these individuals from the RX file, also consolidate the NDC codes 
+# into a list item for each individual and meps_year
+rx_datasets_proc <- rx_datasets %>% 
+  anti_join(censored_rx_individuals) %>% 
+  group_by(DUPERSID, meps_year) %>% 
+  summarize(rx_list = list(RXNDC)) %>% 
+  ungroup()
+
+# Now also remove them from the demographics-bearing dataset
+fyc_data_proc <- fyc_data_proc %>% 
+  anti_join(censored_rx_individuals)
+
+### FINAL dataset
+
+# To risk score this population, we will need a unique ID made out of MEPS ID and meps_year,
+# plus demographics (age/sex), an RX list, and any number of potential profile trials for the 
+# possible health conditions, so we can get a final distribution for the risk score outputs
+# for each individual.
+
+final_rx_data <- rx_datasets_proc %>% 
+  unite(col=id, DUPERSID, meps_year, sep="-")
+
+final_dx_data <- consolidated_conds_probs %>% 
+  unite(col=id, DUPERSID, meps_year, sep="-")
+
+final_input_data <- fyc_data_proc %>% 
+  select(DUPERSID, meps_year, SEX, AGE_EXACT) %>%
+  unite(col=id, DUPERSID, meps_year, sep="-") %>% 
+  left_join(final_rx_data) %>% 
+  left_join(final_dx_data) %>% 
+  replace(.=="NULL", NA)  %>%  # replace any NULLs with NA
+  replace_na(list(freq=1))
+
+# Lastly, write this out as a R data file for input into our HHS-HCC risk score project. 
+final_input_data %>% save(file="./etc/meps_hcc_model_inputs.RData")
