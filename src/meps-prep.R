@@ -4,8 +4,8 @@
 
 ## INTRODUCTION 
 
-# This R Script utilizes a custom MEPS package maintained by Emily Mitchell
-# to retrieve MEPS data files that contain key demographic, ICD-10-CM, and 
+# This R Script utilizes a custom MEPS package maintained by Emily Mitchell (AHRQ)
+# to retrieve MEPS data files that contain key demographic, truncated ICD-10-CM, and 
 # NDC inputs on thousands of individual respondent data contained in the MEPS
 # survey data PUFs. Data is then prepared and gently "editorialized" for
 # processing by the HHS-HCC Risk Score model in a separate R script.
@@ -18,269 +18,377 @@
 
 ## REQUIRED LIBRARIES
 library(tidyverse)
+library(cli)
+library(furrr)
+library(future)
+library(haven)
 
 # This must be installed "from scratch" via Github, consider using devtools::install_github()
+# More info here: https://github.com/e-mitchell/meps_r_pkg
 library(MEPS)
 
-## PREPARE DEMOGRAPHICS INFO
+# No scientific notation
+options(scipen = 999)
 
-# The HHS-HCC model requires age (via DOB) and gender inputs for each individual.
-# These inputs can be extracted for the individual respondent level in the MEPS
-# Full-Year Consolidated (FYC) data public use files. We'll fetch those now.
-
-meps_years <- list(meps_year = c("2016", "2017", "2018", "2019", "2020", "2021"))
-fyc_datasets <- NULL
-
-for (year in meps_years$meps_year)
+# Function to prepare input files for CMS-HCC processing. 
+# Arguments
+# - n_dx_sim - Number of DX scenarios based on full frequency of ICD-10 codes.
+# - sim_only_hcc_dxcodes - If TRUE, any ICD-10-CM codes truncated to 3 digits from MEPS that 
+#     couldn't possibly map to an HCC in v24 or v28 are removed entirely from the simulation process unless
+#     they map to a full ICD-10-CM code with probability of 1 based on the ICD-10-CM frequency distribution file.
+#     (e.g., all I10. dx codes). This won't impact score outputs, but DX profile simulations will be far more simple.
+meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
 {
-  yr2d <- str_sub(year, 3)
-  select_variables <- c("DUPERSID", "VARPSU", "VARSTR", paste0("PERWT",yr2d,"F"),
-                        "DOBYY", "DOBMM", "SEX")
   
-  fyc_data <- MEPS::read_MEPS(type = "FYC", year=year) %>% 
-    select(all_of(select_variables)) %>% 
-    rename_with(~paste0("PERWTYYF"), starts_with("PERWT")) %>% 
-    mutate(meps_year = year) %>% 
-    filter(DOBYY > 0, DOBMM > 0)  # can't risk score these folks!
-
-  fyc_datasets <- fyc_datasets %>% 
-    union_all(fyc_data)
-}
-
-# Tidy up variable inputs, randomly generate a actual day of birth (0 - 31 based on DOBMM and DOBYY)
-fyc_data_proc <- fyc_datasets  %>% 
-  mutate(
-    sex = case_when(
-      SEX == 1 ~ "M",
-      SEX == 2 ~ "F",
-      .default = as.character(SEX)),
-    DOBYY = as.numeric(DOBYY),
-    DOBMM = as.numeric(DOBMM),
-    DOBDD_max = days_in_month(mdy(paste(month(DOBMM, label=T), 1, DOBYY))),
-    DOBDD = map_int(DOBDD_max, ~floor(runif(1, 1, .x+1))),
-    DOB = mdy(paste(month(DOBMM, label=T), DOBDD, DOBYY)),
-    AGE_ASOF_DATE = ymd(paste0(meps_year, "1231")),
-    AGE_EXACT = (AGE_ASOF_DATE - ymd(DOB)) / dyears(1)) %>% 
-  select(-SEX, -DOBYY, -DOBMM, -DOBDD, -DOBDD_max) %>% 
-  rename(SEX=sex) 
-
-## PREPARE DIAGNOSIS INFO
-
-# Now it's time to get a list of ICD-10-CM codes for each individual respondent.
-# MEPS truncates all ICD-10-CM codes to three digits only, and further censors
-# codes for rare or unique diseases. In an attempt to remove the influence of
-# censorship on any analysis of the final dataset once risk scored, we will remove
-# all individuals with censored condition IDs.
-
-# First, let's fetch the necessary data from MEPS.
-
-cond_datasets <- NULL
-
-for (year in meps_years$meps_year)
-{
-  select_variables <- c("DUPERSID", "CONDN", "ICD10CDX", "CCSR1X", "CCSR2X", 
-                        "CCSR3X", "ERCOND", "ERNUM", "IPCOND", "IPNUM", "OPCOND", "OPNUM")
+  ## PREPARE DEMOGRAPHICS INFO
   
-  cond_data <- MEPS::read_MEPS(type = "COND", year=year) %>% 
-    select(any_of(select_variables)) %>% 
-    mutate(meps_year = year)
+  # The HHS-HCC model requires age (via DOB) and gender inputs for each individual.
+  # These inputs can be extracted for the individual respondent level in the MEPS
+  # Full-Year Consolidated (FYC) data public use files. We'll fetch those now.
   
-  if(as.numeric(year) < 2021) {
-    cond_data <- cond_data %>% 
-      mutate(
-        ERCOND = case_when(
-          ERNUM > 0 ~ 1,
-          ERNUM == 0 ~ 2,
-          .default = ERNUM),
-        IPCOND = case_when(
-          IPNUM > 0 ~ 1,
-          IPNUM == 0 ~ 2,
-          .default = IPNUM),
-        OPCOND = case_when(
-          OPNUM > 0 ~ 1,
-          OPNUM == 0 ~ 2,
-          .default = OPNUM)) %>% 
-      select(-ERNUM, -IPNUM, -OPNUM)
+  meps_years <- list(meps_year = c("2016", "2017", "2018", "2019", "2020", "2021", "2022"))
+  fyc_datasets <- NULL
+  
+  # Function to rename columns
+  rename_fields <- function(names) {
+    # Iterate over each name and apply the renaming logic
+    names <- sapply(names, function(name) {
+      # Check if the name matches the pattern
+      if (str_detect(name, "^(PRI|MCR|MCD)[A-Z]{2}\\d{2}$")) {
+        # Replace the last two digits with "YY"
+        name <- str_sub(name, 1, -3) %>% str_c("YY")
+      }
+      else if (str_detect(name, "^INS[A-Z]{2}\\d{2}X$")) {
+        # Replace the last two digits with "YY"
+        name <- str_remove(name, "\\d{2}X") %>% str_c("YY")
+      }
+      return(name)  # Return the modified or original name
+    })
+    return(names)
   }
   
-  cond_datasets <- cond_datasets %>% 
-    union_all(cond_data)
-}
-
-# NEXT, let's take note of where the population has censored codes - we want to remove
-# any censored individuals from our analysis, ideally. CCSR codes are also sometimes censored,
-# so we'll remove those as well. Don't do any important analysis with this dataset, 
-# it's just for illustrative purposes!
-
-censored_code_individuals <- cond_datasets %>% 
-  filter(ICD10CDX < 0 | CCSR1X < -1 | CCSR2X < -1 | CCSR3X < -1) %>% 
-  distinct(DUPERSID, meps_year) 
-
-# Remove these individuals from the conditions file
-cond_datasets_proc <- cond_datasets %>% 
-  anti_join(censored_code_individuals)
-
-# Now also remove them from the demographics-bearing dataset
-fyc_data_proc <- fyc_data_proc %>% 
-  anti_join(censored_code_individuals)
-
-# Replace all "-1" values in CCSR fields with NAs
-cond_datasets_proc <- cond_datasets_proc %>% 
-  mutate(
-    CCSR1X = if_else(CCSR1X == "-1", NA_character_, CCSR1X),
-    CCSR2X = if_else(CCSR2X == "-1", NA_character_, CCSR2X),
-    CCSR3X = if_else(CCSR3X == "-1", NA_character_, CCSR3X))
-
-# We will next build the AHRQ CCSR mapping from ICD10CM codes to CCSR Categories.
-# This is done in the source file "src/ahrq-ccsr-prep.R".
-source("./src/ahrq-ccsr-prep.R")
-icd10_ccsr3_map <- read_csv("./etc/ahrq_ccsr_maps/icd10_ccsr3_map.csv") %>% 
-  mutate(meps_year = as.character(meps_year))
-
-# NOW we have a complete mapping for all years (2016 - 2021) of ICD10CM codes
-# to CCSR codes and descriptions. Now we have to handle the matter of the missing
-# ICD-10-CM digits, which are all truncated to three-digit codes in the
-# MEPS condition dataset. 
-
-# To solve for this, we'll turn to the state of California, which has
-# open data reporting for ICD-10-CM frequency tables for ED, IP, and OP
-# events. Using these frequency tables, we can form a distribution of complete
-# ICD-10-CM codes based on the truncated codes in MEPS plus the ICD-10-CM code.
-
-source("./src/icd10-freq-prep.R")
-ca_icd10_freqs <- read_csv("./etc/icd10_freq_tables/icd10_freqs.csv") %>% 
-  mutate(meps_year = as.character(meps_year))
-
-# Now we'll combine the icd10-cm frequency data with our conditions file
-conds_w_freqs <- cond_datasets_proc %>% 
-  left_join(ca_icd10_freqs) %>% 
-  inner_join(icd10_ccsr3_map) %>% 
-  group_by(DUPERSID, CONDN, ICD10CDX, CCSR1X, CCSR2X, CCSR3X, meps_year) %>% 
-  mutate(ed_pct = ed_freq / sum(ed_freq),
-         ip_pct = ip_freq / sum(ip_freq),
-         op_pct = op_freq / sum(op_freq),
-         total_pct = total_freq / sum(total_freq)) %>% 
-  ungroup() %>% 
-  mutate(
-    use_pct = case_when(
-      ERCOND == 1 ~ ed_pct,
-      IPCOND == 1 ~ ip_pct,
-      OPCOND == 1 ~ op_pct,
-      .default = total_pct
+  for (year in meps_years$meps_year)
+  {
+    yr2d <- str_sub(year, 3)
+    select_variables <- c("DUPERSID", "VARPSU", "VARSTR", paste0("PERWT",yr2d,"F"),
+                          paste0("TOTEXP",yr2d), paste0("TOTPRV",yr2d), paste0("TOTMCR",yr2d), 
+                          paste0("TOTMCD",yr2d), paste0("TOTSLF",yr2d), 
+                          "DOBYY", "DOBMM", "SEX")
+    
+    fyc_data <- MEPS::read_MEPS(type = "FYC", year=year) %>% 
+      select(all_of(select_variables), matches("^(PRI|MCR|MCD)(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\d{2}$"),
+             matches("^INS(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\d{2}X$")) %>% 
+      rename_with(~paste0("PERWTYYF", recycle0=T), starts_with("PERWT")) %>% 
+      rename_with(~paste0("TOTEXPYY", recycle0=T), starts_with("TOTEXP")) %>% 
+      rename_with(~paste0("TOTPRVYY", recycle0=T), starts_with("TOTPRV")) %>% 
+      rename_with(~paste0("TOTMCRYY", recycle0=T), starts_with("TOTMCR")) %>% 
+      rename_with(~paste0("TOTMCDYY", recycle0=T), starts_with("TOTMCD")) %>% 
+      rename_with(~paste0("TOTSLFYY", recycle0=T), starts_with("TOTSLF")) %>% 
+      rename_with(.fn = rename_fields) %>% 
+      mutate(meps_year = year) 
+  
+    fyc_datasets <- fyc_datasets %>% 
+      union_all(fyc_data)
+  }
+  
+  #### Organize Exposure Calculations
+  # Determine PMPM Costs by Payor (PRV + MCR + MCD + SLF + OTH = TOT)
+  # Determine Exposures by Payor Coverage (PRV + MCR + MCD + UNI (uninsured) + OTH = TOT)
+  # Assign Dual Enrollee flags / indicators for Duals
+  
+  # First prepare a summary of exposure months by cateogry above, plus DUPERSID and meps_year
+  fyc_data_exposures <- fyc_datasets %>% 
+    select(DUPERSID, meps_year, matches("^(PRI|MCR|MCD|INS)[A-Z]{2}YY$")) %>% 
+    pivot_longer(
+      cols = -c(DUPERSID,meps_year),
+      names_to = c("Type", "Month"),
+      names_pattern = "(\\w{3})(\\w{2})",
+      values_to = "Enrolled"
+    ) %>% 
+    mutate(Enrolled = !as.logical(Enrolled - 1)) %>% 
+    pivot_wider(names_from = "Type", values_from = "Enrolled") %>% 
+    mutate(OTH = (!MCR & !PRI & !MCD & INS),
+           UNI = !INS) %>% 
+    relocate(OTH, .before=INS) %>% 
+    rename(PRV=PRI,
+           TOT=INS) %>% 
+    pivot_longer(cols = -c(DUPERSID, meps_year, Month),
+                 names_to = "Type",
+                 values_to = "Enrolled") %>% 
+    write_csv("./etc/outputs/exposures_monthly.csv")
+  
+  # Summarize month-by-month enrollment with a count of expos by member, meps_year, and coverage type
+  fyc_data_expos_totals <- fyc_data_exposures %>% 
+    group_by(DUPERSID, meps_year, Type) %>% 
+    summarize(Expos = sum(Enrolled)) %>% 
+    ungroup() %>% 
+    group_by(DUPERSID, meps_year, Type) %>% 
+    write_csv("./etc/outputs/exposures_total.csv")
+  
+  # Identify list of only those with Medicare exposure - we won't risk score anyone else
+  covered_by_mcr <- fyc_data_expos_totals %>% 
+    filter(Type == "MCR" & Expos>0) %>% 
+    distinct(DUPERSID, meps_year)
+  
+  # Now prepare a summary of expenditures by DUPERSID and meps_year
+  fyc_expenditures_totals <- fyc_datasets %>% 
+    group_by(DUPERSID, meps_year) %>% 
+    summarize(across(
+      .cols = matches("^TOT(EXP|MCR|MCD|PRV|SLF)YY$"),
+      .fns = sum,
+      .names = "{.col}"
     )) %>% 
-  select(DUPERSID, meps_year, ICD10CDX, ICD10CM, use_pct) 
-
-# Next we will pick a number of simulations to run relative to the size
-# of the sample weighting assigned to the MEPS respondent.
-# This means n draws
-# for how each 3-digit ICD code is completed based on our frequency distr.
-
-# Get sample weights and rescale - this will inform the number of trials
-meps_weights <- fyc_data_proc %>% 
-  select(DUPERSID, meps_year, PERWTYYF) %>% 
-  mutate(POOLWTYYF = PERWTYYF / 6) %>% 
-  select(-PERWTYYF)
-
-# Perform 1 million trials of different 
-ipw_scaler <- 1e6/sum(meps_weights$POOLWTYYF)
-
-prof_generator <- function(data, trials) {
-  trials_out <- list(trial = 1:trials) %>% 
-    as_tibble() %>% 
-    cross_join(data) %>% 
-    group_by(trial, ICD10CDX) %>% 
+    mutate(TOTOTHYY = max(TOTEXPYY - (TOTMCRYY + TOTPRVYY + TOTMCDYY + TOTSLFYY), 0)) %>% 
+    ungroup() %>% 
+    rename(TOTTOTYY = TOTEXPYY) %>% # Trick to get this category to be labelled "TOT" consistent with the exposures file
+    pivot_longer(
+      cols = -c(DUPERSID, meps_year),
+      names_to = "Type",
+      names_pattern = "TOT(\\w{3})YY",
+      values_to = "Cost") %>% 
+    write_csv("etc/outputs/expenditures_total.csv")
+  
+  fyc_data_expos_costs <- fyc_expenditures_totals %>% 
+    filter(Type != "SLF") %>% 
+    left_join(fyc_data_expos_totals) %>% 
+    mutate(PMPM_Cost = Cost/Expos) %>% 
+    write_csv("etc/outputs/expenditures_pmpm.csv", na="")
+  
+  ### Prepare Demographic Inputs for Risk Adjusters
+  # Tidy up variable inputs, randomly generate a actual day of birth (0 - 31 based on DOBMM and DOBYY), 
+  # And remove exposure calc and expenditure variables - we don't need those anymore as we have 
+  # summarized them in the previous section.
+  
+  ra_demos <- fyc_datasets %>% 
+    filter(DOBYY > 0 & DOBMM > 0) %>% 
+    inner_join(covered_by_mcr) %>% 
     mutate(
-      rand = runif(1, min=0, max=1),
-      cpd = cumsum(use_pct),
-      lag_cpd = lag(cpd),
-      cpd_lo = if_else(is.na(lag_cpd), 0, lag_cpd),
-      cpd_hi = cpd,
-      selected = between(rand, cpd_lo, cpd_hi)) %>% 
-    ungroup() %>% 
-    filter(selected) %>% 
-    group_by(trial) %>% 
-    summarize(profile = list(ICD10CM)) %>% 
-    ungroup() %>% 
-    group_by(profile) %>% 
-    summarize(freq = n()) %>% 
-    ungroup()
+      sex = case_when(
+        SEX == 1 ~ "M",
+        SEX == 2 ~ "F",
+        .default = "U"),
+      DOBYY = as.numeric(DOBYY),
+      DOBMM = as.numeric(DOBMM),
+      DOBDD_max = days_in_month(mdy(paste(month(DOBMM, label=T), 1, DOBYY))),
+      DOBDD = map_int(DOBDD_max, ~floor(runif(1, 1, .x+1))),
+      DOB = mdy(paste(month(DOBMM, label=T), DOBDD, DOBYY)),
+      AGE_ASOF_DATE = ymd(paste0(meps_year, "1231")),
+      AGE_EXACT = (AGE_ASOF_DATE - ymd(DOB)) / dyears(1)) %>% 
+    select(-SEX, -DOBYY, -DOBMM, -DOBDD, -DOBDD_max) %>% 
+    select(-matches("^(PRI|MCR|MCD)(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\w{2}$"),
+           -matches("^INS(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)YY$"),
+           -matches("TOT\\w{3}YY"),
+           -VARSTR, -VARPSU, -PERWTYYF) %>% 
+    rename(SEX=sex) %>% 
+    write_csv("etc/outputs/demographics.csv")
   
-  trials_out
+  ## PREPARE DIAGNOSIS INFO
+  # Now it's time to get a list of ICD-10-CM codes for each individual respondent.
+  # MEPS truncates all ICD-10-CM codes to three digits only, and further censors
+  # codes for rare or unique diseases. In an attempt to remove the influence of
+  # censorship on any analysis of the final dataset once risk scored, we will remove
+  # all individuals with censored condition IDs.
+  
+  # First, let's fetch the necessary data from MEPS.
+  cond_datasets <- NULL
+  
+  for (year in meps_years$meps_year)
+  {
+    select_variables <- c("DUPERSID", "CONDN", "ICD10CDX", "CCSR1X", "CCSR2X", 
+                          "CCSR3X", "CCSR4X", "ERCOND", "ERNUM", "IPCOND", "IPNUM", "OPCOND", "OPNUM")
+    
+    cond_data <- MEPS::read_MEPS(type = "COND", year=year) %>% 
+      select(any_of(select_variables)) %>% 
+      mutate(meps_year = year)
+    
+    if(as.numeric(year) < 2021) {
+      cond_data <- cond_data %>% 
+        mutate(
+          ERCOND = case_when(
+            ERNUM > 0 ~ 1,
+            ERNUM == 0 ~ 2,
+            .default = ERNUM),
+          IPCOND = case_when(
+            IPNUM > 0 ~ 1,
+            IPNUM == 0 ~ 2,
+            .default = IPNUM),
+          OPCOND = case_when(
+            OPNUM > 0 ~ 1,
+            OPNUM == 0 ~ 2,
+            .default = OPNUM)) %>% 
+        select(-ERNUM, -IPNUM, -OPNUM)
+    }
+    
+    if(year < 2022) {
+      cond_data <- cond_data %>% 
+        mutate(CCSR4X = NA_character_) %>% 
+        relocate(CCSR4X, .after=CCSR3X)
+    }
+    
+    cond_datasets <- cond_datasets %>% 
+      union_all(cond_data)
+  }
+  
+  # NEXT, let's take note of where the population has censored codes - we will label them with a flag
+  # indicating that there were censored codes associated with the record, which we'll key by DUPERSID and YEAR. 
+  # CCSR codes are also sometimes censored,
+  # so we'll flag when those are deleted as well. Don't do any important analysis with this dataset, 
+  # it's just for illustrative purposes on how to do analyses!
+  
+  censored_code_individuals <- cond_datasets %>% 
+    filter(ICD10CDX < 0 | (CCSR1X < -1 | CCSR2X < -1 | CCSR3X < -1)) %>% 
+    distinct(DUPERSID, meps_year) %>%
+    mutate(CensoredDXFlag = T)
+  
+  # Label these individuals in the conditions file
+  cond_datasets_proc <- cond_datasets %>% 
+    left_join(censored_code_individuals)
+  
+  # Now also label them in the demographics-bearing dataset
+  ra_demos <- ra_demos %>% 
+    left_join(censored_code_individuals) %>% 
+    write_csv("etc/outputs/demographics.csv")
+  
+  # Replace all "-1" values in CCSR fields with NAs
+  cond_datasets_proc <- cond_datasets_proc %>% 
+    mutate(
+      CCSR1X = if_else(CCSR1X == "-1", NA_character_, CCSR1X),
+      CCSR2X = if_else(CCSR2X == "-1", NA_character_, CCSR2X),
+      CCSR3X = if_else(CCSR3X == "-1", NA_character_, CCSR3X),
+      CCSR4X = if_else(CCSR4X == "-1", NA_character_, CCSR4X))
+  
+  
+  # We will next build the AHRQ CCSR mapping from ICD10CM codes to CCSR Categories.
+  # This is done in the source file "src/ahrq-ccsr-prep.R".
+  
+  icd10_ccsr4_map <- read_csv("./etc/ahrq_ccsr_maps/icd10_ccsr4_map.csv", 
+                              guess_max = 60000) %>% 
+    mutate(meps_year = as.character(meps_year))
+  
+  # NOW we have a complete mapping for all years (2016 - 2022) of ICD10CM codes
+  # to CCSR codes and descriptions. Now we have to handle the matter of the missing
+  # ICD-10-CM digits, which are all truncated to three-digit codes in the
+  # MEPS condition dataset. 
+  
+  # To solve for this, we'll turn to the state of California, which has
+  # open data reporting for ICD-10-CM frequency tables for ED, IP, and OP
+  # events. Using these frequency tables, we can form a distribution of complete
+  # ICD-10-CM codes based on the truncated codes in MEPS plus the ICD-10-CM code.
+  
+  # source("./src/icd10-freq-prep.R")
+  ca_icd10_freqs <- read_csv("./etc/icd10_freq_tables/icd10_freqs.csv",
+                             guess_max = 60000) %>% 
+    mutate(meps_year = as.character(meps_year))
+  
+  # # Get ICD-10 codes that map to CMS-HCC model HCCs for V24 and V28
+  hcc_icd_mappings <- read_csv("etc/hcc-icd-mappings.csv")  %>% 
+    select(`Diagnosis\nCode`, `CMS-HCC\nModel\nCategory\nV24`, `CMS-HCC\nModel\nCategory\nV28`) %>% 
+    rename(ICD10CM = `Diagnosis\nCode`) %>% 
+    mutate(CMS_HCC = if_any(2:3, ~ !is.na(.))) %>% 
+    mutate(ICD10CDX = str_extract(ICD10CM, "^\\w{1}\\d{2}")) %>% 
+    filter(CMS_HCC == T) %>% 
+    distinct(ICD10CDX, CMS_HCC)
+  
+  # Now we'll combine the icd10-cm frequency data with our conditions file
+  conds_w_freqs <- cond_datasets_proc %>% 
+    left_join(ca_icd10_freqs) %>% 
+    inner_join(icd10_ccsr4_map) %>% 
+    group_by(DUPERSID, CONDN, ICD10CDX, CCSR1X, CCSR2X, CCSR3X, CCSR4X, meps_year) %>% 
+    mutate(ed_pct = ed_freq / sum(ed_freq),
+           ip_pct = ip_freq / sum(ip_freq),
+           op_pct = op_freq / sum(op_freq),
+           total_pct = total_freq / sum(total_freq)) %>% 
+    ungroup() %>% 
+    mutate(
+      use_pct = case_when(
+        ERCOND == 1 ~ ed_pct,
+        IPCOND == 1 ~ ip_pct,
+        OPCOND == 1 ~ op_pct,
+        .default = total_pct
+      )) %>% 
+    select(DUPERSID, meps_year, ICD10CDX, ICD10CM, use_pct) %>% 
+    filter(use_pct > 0)  # functionally some of these probabilities are so small that they are stored as zero - let's get rid of these.
+  
+  # Are we only using HCC dx codes?
+  if(sim_only_hcc_dxcodes) {
+    use_pct_thresh <- 1
+  } else {
+    use_pct_thresh <- .05
+  }
+  
+  #  The set of all combinations for some of these DX arrays is so huge that we need to edit down some of 
+  # the non-HCC related diagnoses that are super infrequent. Goal is to remove low-probability DX codes that aren't
+  # associated with any change in the CMS-HCC model output. That way we still have a realistic distribution
+  # of simulated DX codes based on the 3 digit truncation from MEPS, but we're not altering the probability of
+  # sampling any HCC-related probabilities at the 3 digit ICD10 grouping level.
+  conds_w_freqs_edited <- conds_w_freqs %>% 
+    inner_join(covered_by_mcr) %>%  # Limit this exercise to only MCR benes
+    left_join(hcc_icd_mappings) %>% 
+    replace_na(list(CMS_HCC = F)) %>% 
+    filter(CMS_HCC | use_pct >= !!use_pct_thresh) %>% # Either it's a 3-digit ICD DX with associated HCC's or its got a sample prob over .05
+    group_by(DUPERSID, meps_year, ICD10CDX, CMS_HCC) %>% 
+    mutate(new_use_pct = use_pct / sum(use_pct)) %>% 
+    ungroup() %>% 
+    select(-use_pct) %>% 
+    rename(use_pct = new_use_pct)
+    
+  # Now do the primary processing, one individual at a time, getting
+  # a risk score for every possible DX code configuration and associated probability
+  # with that configuration
+  
+  # Function to simulate DX code profiles
+  simulate_dx_profiles <- function(group, n_sim = n_dx_sim) {
+    icd10cm_lists <- group %>% group_by(ICD10CDX) %>% summarise(ICD10CM_list = list(ICD10CM))
+    use_pct_lists <- group %>% group_by(ICD10CDX) %>% summarise(use_pct_list = list(use_pct))
+    
+    simulations <- replicate(n_sim, {
+      sample_dx_codes <- map2(icd10cm_lists$ICD10CM_list, use_pct_lists$use_pct_list, ~sample(.x, size = 1, prob = .y))
+      paste(unlist(sample_dx_codes), collapse = ", ")
+    })
+    
+    result <- tibble(
+      DX_profile = simulations
+    ) %>%
+      count(DX_profile, name = "count") %>%
+      mutate(probability = count / n_sim) 
+  
+    return(result)
+  }
+  
+  # Initialize parallel processing with the number of cores available
+  plan(multisession, workers = availableCores())
+  
+  # Build at least n_dx_sim simulated combinations of all possible DX codes, sampled based on edited ICD10 code
+  # frequency distributions (unedited when associated with any HCCs in the CMS-HCC model)
+  make_contingencies <- conds_w_freqs_edited %>% 
+    group_by(DUPERSID, meps_year) %>%
+    nest() %>% 
+    ungroup() %>% 
+    mutate(simulate_dx_profiles = future_map(data, simulate_dx_profiles, .progress = T,
+                                             .options = furrr_options(seed=T)))
+  
+  # Back to single-core processing
+  plan(sequential)
+  
+  contingencies_to_run <- make_contingencies %>% 
+    select(-data) %>% 
+    group_by(DUPERSID, meps_year) %>% 
+    unnest(cols = c(simulate_dx_profiles)) %>% 
+    ungroup() %>% 
+    group_by(DUPERSID, meps_year) %>% 
+    mutate(profile_id = row_number(),
+           id = str_c(DUPERSID, meps_year, profile_id, sep="-")) %>% 
+    ungroup() %>% 
+    right_join(ra_demos) %>% 
+    mutate(id = if_else(is.na(id), str_c(DUPERSID, meps_year, 1, sep="-"), id),
+           probability = if_else(is.na(probability), 1, probability)) %>% 
+    mutate(profile = map(DX_profile, function(x) { strsplit(x, ", ")[[1]] } )) %>% 
+    select(DUPERSID, meps_year, id, SEX, AGE_EXACT, profile, probability) %>% 
+    filter(!is.na(SEX)) 
+  
+  save(contingencies_to_run, file=here::here(paste0("etc/contingencies_n=",n_dx_sim,".rda")))
 }
 
-# Finally assemble all ICD-10-CM code lists, and give a frequency distribution
-# for each individual to determine how many unique ICD-10-CM profiles to run
+# Testing
+# meps_prep(n_dx_sim = 500)
 
-consolidated_conds_probs <- conds_w_freqs %>% 
-  group_by(DUPERSID, meps_year) %>% 
-  nest() %>% 
-  ungroup() %>% 
-  left_join(meps_weights) %>% 
-  filter(POOLWTYYF > 0) %>% 
-  mutate(trials = ceiling(POOLWTYYF * ipw_scaler)) %>% 
-  mutate(results = map2(data, trials, prof_generator, .progress=T)) %>% 
-  select(DUPERSID, meps_year, results) %>% 
-  unnest(results)
-
-#### DRUGS!
-
-# Drugs should be pretty easy, we just need a list of NDCs for each individual.
-
-# First, let's fetch the necessary data from MEPS.
-
-rx_datasets <- NULL
-
-for (year in meps_years$meps_year)
-{
-  select_variables <- c("DUPERSID", "RXNDC")
-  
-  rx_data <- MEPS::read_MEPS(type = "RX", year=year) %>% 
-    select(all_of(select_variables)) %>% 
-    mutate(meps_year = year)
-  
-  rx_datasets <- rx_datasets %>% 
-    union_all(rx_data)
-}
-
-# Now, let's go through and identify any respondents who have been censored, so we can remove them
-# from this exercise.
-
-censored_rx_individuals <- rx_datasets %>% 
-  filter(RXNDC < 0) %>% 
-  distinct(DUPERSID, meps_year) 
-
-# Remove these individuals from the RX file, also consolidate the NDC codes 
-# into a list item for each individual and meps_year
-rx_datasets_proc <- rx_datasets %>% 
-  anti_join(censored_rx_individuals) %>% 
-  group_by(DUPERSID, meps_year) %>% 
-  summarize(rx_list = list(RXNDC)) %>% 
-  ungroup()
-
-# Now also remove them from the demographics-bearing dataset
-fyc_data_proc <- fyc_data_proc %>% 
-  anti_join(censored_rx_individuals)
-
-### FINAL dataset
-
-# To risk score this population, we will need a unique ID made out of MEPS ID and meps_year,
-# plus demographics (age/sex), an RX list, and any number of potential profile trials for the 
-# possible health conditions, so we can get a final distribution for the risk score outputs
-# for each individual.
-
-final_rx_data <- rx_datasets_proc %>% 
-  unite(col=id, DUPERSID, meps_year, sep="-")
-
-final_dx_data <- consolidated_conds_probs %>% 
-  unite(col=id, DUPERSID, meps_year, sep="-")
-
-final_input_data <- fyc_data_proc %>% 
-  select(DUPERSID, meps_year, SEX, AGE_EXACT) %>%
-  unite(col=id, DUPERSID, meps_year, sep="-") %>% 
-  left_join(final_rx_data) %>% 
-  left_join(final_dx_data) %>% 
-  replace(.=="NULL", NA)  %>%  # replace any NULLs with NA
-  replace_na(list(freq=1))
-
-# Lastly, write this out as a R data file for input into our HHS-HCC risk score project. 
-final_input_data %>% save(file="./etc/meps_hcc_model_inputs.RData")
