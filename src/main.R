@@ -19,7 +19,7 @@ library(MEPS)
 #     (e.g., all I10. dx codes). This won't impact score outputs, but DX profile simulations will be far more simple
 #     and the process will run substantially faster.
 # - sample_prop - percentage of MEPS respondents to sample (used primarily for testing)
-main <- function(n_dx_sim = 250, sim_only_hcc_dxcodes = T, sample_prop = 1) {
+main <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = T, sample_prop = 1) {
   
   # Prepare ICD-10-CM to CCSR Crossmap Files for each year, 2016 - 2022
   source(here::here("src/ahrq-ccsr-prep.R"))
@@ -84,7 +84,6 @@ main <- function(n_dx_sim = 250, sim_only_hcc_dxcodes = T, sample_prop = 1) {
   save(mode_hcc_values, file=here::here("etc/outputs/mode_hcc_values.rda"))
   
   # Postprocessing content to one day go here!
-  
 }
 
 main()

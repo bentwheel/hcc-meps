@@ -11,3 +11,6 @@ mode_hcc_values.csv
 mode_hcc_values.rda
 mode_risk_scores.csv
 risk_scores.rda
+esrd_individuals.csv
+predictions_CNA.csv
+predictions_NE.csv

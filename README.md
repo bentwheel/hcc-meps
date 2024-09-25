@@ -1,25 +1,26 @@
 # hcc-meps
-Process to apply HHS-HCC model scores to MEPS respondent data from 2016 - 2021
+Process to apply HHS-HCC model scores to MEPS respondent data from 2016 - 2022. This writeup is very incomplete and a work in progress.
 
 # Overview & Purpose
+It would be nice to have a set of prospective risk scores from a well-used and trusted RA model to go alongside other analyses of MEPS data. Typically, risk scores are only available with administrative claims data, which does not tend to include information about socioeconomic factors like income, race, ethnicity, biometric observations, or SDoH information.  
+
+However, MEPS has most of the information required to risk adjust its respondent population using the CMS-HCC models. Furthermore, the CMS-HCC risk scores are quite predictive of future year costs for this population. This allows for expedited anlyses using MEPS data with a single risk score that encapsulates expected costs and quantifies health status for the Non-Dual Aged Medicare population.
 
 # Preparation of MEPS Data Sources
+Coming soon.
 
-# HCC Models Processed
+# Is it Predictive?
+Yes!
 
-# Comorbidity Models Processed
+![](./etc/images/rsq_ne.png)
 
-# Outputs
+![](./etc/images/rsq_cna.png)
 
-risk_scores - average risk score for each set of DX combination risk scores grouped by DUPERSID, model, Run_ID, and meps_year
+![](./etc/images/a2e_ne.png)
 
-mode_dx - readout of DX code combination modes based on trial sampling, grouped by DUPERSID, model, Run_ID, and meps_year
+![](./etc/images/a2e_cna_by_age.png)
 
-mode_scores_cmshcc - risk score for the most commonly simulated DX code combination (the one represented in mode_dx), grouped by DUPERSID, model, Run_ID, and meps_year
-
-mode_mapping_cmshcc - mapping of DX codes in mode_dx to HCCs in the CMS-HCC model, grouped by DUPERSID, model, Run_ID, and meps_year
-
-mode_values_cmshcc - mapping of HCCs in mode_mapping_cmshcc to score components in the CMS_HCC model, grouped by DUPERSID, model, Run_ID, and meps_year
+![](./etc/images/a2e_cna_by_age_model.png)
 
 # Process Flow Overview
 

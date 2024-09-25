@@ -37,7 +37,7 @@ options(scipen = 999)
 #     couldn't possibly map to an HCC in v24 or v28 are removed entirely from the simulation process unless
 #     they map to a full ICD-10-CM code with probability of 1 based on the ICD-10-CM frequency distribution file.
 #     (e.g., all I10. dx codes). This won't impact score outputs, but DX profile simulations will be far more simple.
-meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
+meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
 {
   
   ## PREPARE DEMOGRAPHICS INFO
@@ -73,6 +73,8 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
     select_variables <- c("DUPERSID", "VARPSU", "VARSTR", paste0("PERWT",yr2d,"F"),
                           paste0("TOTEXP",yr2d), paste0("TOTPRV",yr2d), paste0("TOTMCR",yr2d), 
                           paste0("TOTMCD",yr2d), paste0("TOTSLF",yr2d), 
+                          paste0("RXEXP",yr2d), paste0("RXPRV",yr2d), paste0("RXMCR",yr2d), 
+                          paste0("RXMCD",yr2d), paste0("RXSLF",yr2d), 
                           "DOBYY", "DOBMM", "SEX")
     
     fyc_data <- MEPS::read_MEPS(type = "FYC", year=year) %>% 
@@ -84,8 +86,20 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
       rename_with(~paste0("TOTMCRYY", recycle0=T), starts_with("TOTMCR")) %>% 
       rename_with(~paste0("TOTMCDYY", recycle0=T), starts_with("TOTMCD")) %>% 
       rename_with(~paste0("TOTSLFYY", recycle0=T), starts_with("TOTSLF")) %>% 
+      rename_with(~paste0("RXEXPYY", recycle0=T), starts_with("RXEXP")) %>% 
+      rename_with(~paste0("RXPRVYY", recycle0=T), starts_with("RXPRV")) %>% 
+      rename_with(~paste0("RXMCRYY", recycle0=T), starts_with("RXMCR")) %>% 
+      rename_with(~paste0("RXMCDYY", recycle0=T), starts_with("RXMCD")) %>% 
+      rename_with(~paste0("RXSLFYY", recycle0=T), starts_with("RXSLF")) %>% 
       rename_with(.fn = rename_fields) %>% 
-      mutate(meps_year = year) 
+      mutate(meps_year = year) %>% 
+      relocate(meps_year, .after=DUPERSID)
+    
+    # If meps_year >= 2018, then we need to remove the first two characters of DUPERSID
+    # because it contains the two-digit PANEL number. This will break longitudinal joins
+    # later when comparing base year scores to projection year expenditures.
+    fyc_data <- fyc_data %>% 
+      mutate(DUPERSID = if_else(meps_year >= 2018, str_sub(DUPERSID, start=3L, end=-1L), DUPERSID))
   
     fyc_datasets <- fyc_datasets %>% 
       union_all(fyc_data)
@@ -125,7 +139,7 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
     group_by(DUPERSID, meps_year, Type) %>% 
     write_csv("./etc/outputs/exposures_total.csv")
   
-  # Identify list of only those with Medicare exposure - we won't risk score anyone else
+  # Identify list of only those with Medicare exposure - we won't risk score anyone else in this project.
   covered_by_mcr <- fyc_data_expos_totals %>% 
     filter(Type == "MCR" & Expos>0) %>% 
     distinct(DUPERSID, meps_year)
@@ -134,24 +148,36 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
   fyc_expenditures_totals <- fyc_datasets %>% 
     group_by(DUPERSID, meps_year) %>% 
     summarize(across(
-      .cols = matches("^TOT(EXP|MCR|MCD|PRV|SLF)YY$"),
+      .cols = matches("^(TOT|RX)(EXP|MCR|MCD|PRV|SLF)YY$"),
       .fns = sum,
       .names = "{.col}"
     )) %>% 
-    mutate(TOTOTHYY = max(TOTEXPYY - (TOTMCRYY + TOTPRVYY + TOTMCDYY + TOTSLFYY), 0)) %>% 
     ungroup() %>% 
-    rename(TOTTOTYY = TOTEXPYY) %>% # Trick to get this category to be labelled "TOT" consistent with the exposures file
+    group_by(DUPERSID, meps_year) %>% 
+    mutate(TOTOTHYY = max(TOTEXPYY - (TOTMCRYY + TOTPRVYY + TOTMCDYY + TOTSLFYY), 0),
+           RXOTHYY = max(RXEXPYY - (RXMCRYY + RXPRVYY + RXMCDYY + RXSLFYY), 0)) %>% 
+    ungroup() %>% 
+    rename(TOTTOTYY = TOTEXPYY,
+           RXTOTYY = RXEXPYY) %>% # Trick to get this category to be labelled "TOT" consistent with the exposures file
     pivot_longer(
       cols = -c(DUPERSID, meps_year),
-      names_to = "Type",
-      names_pattern = "TOT(\\w{3})YY",
+      names_to = c("TOTorRX", "Type"),
+      names_pattern = "(TOT|RX)(\\w{3})YY",
       values_to = "Cost") %>% 
+    pivot_wider(
+      names_from = TOTorRX,
+      values_from = Cost
+    ) %>% 
+    rename(Cost = TOT,
+           CostRX = RX) %>% 
+    mutate(Cost_noRX = Cost - CostRX) %>% 
+    select(-CostRX) %>%
     write_csv("etc/outputs/expenditures_total.csv")
   
   fyc_data_expos_costs <- fyc_expenditures_totals %>% 
-    filter(Type != "SLF") %>% 
     left_join(fyc_data_expos_totals) %>% 
-    mutate(PMPM_Cost = Cost/Expos) %>% 
+    mutate(PMPM_Cost = Cost/Expos,
+           PMPM_Cost_noRX = Cost_noRX / Expos) %>% 
     write_csv("etc/outputs/expenditures_pmpm.csv", na="")
   
   ### Prepare Demographic Inputs for Risk Adjusters
@@ -178,6 +204,7 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
     select(-matches("^(PRI|MCR|MCD)(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\w{2}$"),
            -matches("^INS(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)YY$"),
            -matches("TOT\\w{3}YY"),
+           -matches("RX\\w{3}YY"),
            -VARSTR, -VARPSU, -PERWTYYF) %>% 
     rename(SEX=sex) %>% 
     write_csv("etc/outputs/demographics.csv")
@@ -225,6 +252,10 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
         relocate(CCSR4X, .after=CCSR3X)
     }
     
+    # For meps_year >= 2018, remove 2 digit panel number from first 2 characters of DUPERSID:
+    cond_data <- cond_data %>% 
+      mutate(DUPERSID = if_else(meps_year >= 2018, str_sub(DUPERSID, start=3L, end=-1L), DUPERSID))
+    
     cond_datasets <- cond_datasets %>% 
       union_all(cond_data)
   }
@@ -248,6 +279,12 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = F)
   ra_demos <- ra_demos %>% 
     left_join(censored_code_individuals) %>% 
     write_csv("etc/outputs/demographics.csv")
+  
+  # Find members with ESRD so we can remove them from the CNA and NE models later
+  esrd_individuals <- cond_datasets_proc %>% 
+    filter(ICD10CDX == "N18") %>% 
+    distinct(DUPERSID, meps_year) %>% 
+    write_csv(here::here("etc/outputs/esrd_individuals.csv"))
   
   # Replace all "-1" values in CCSR fields with NAs
   cond_datasets_proc <- cond_datasets_proc %>% 
