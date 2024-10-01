@@ -75,12 +75,18 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = T)
                           paste0("TOTMCD",yr2d), paste0("TOTSLF",yr2d), 
                           paste0("RXEXP",yr2d), paste0("RXPRV",yr2d), paste0("RXMCR",yr2d), 
                           paste0("RXMCD",yr2d), paste0("RXSLF",yr2d), 
-                          "DOBYY", "DOBMM", "SEX")
+                          paste0("INSCOV",yr2d), paste0("REGION",yr2d), paste0("POVLEV",yr2d),
+                          "RACETHX", "DOBYY", "DOBMM", "SEX",
+                          "CHDDX", "ANGIDX", "MIDX", "OHRTDX", ifelse(year >= 2018, "DIABDX_M18", "DIABDX"), "HIBPDX", "CHOLDX", 
+                          "ASTHDX", "ARTHDX", "CANCERDX", "STRKDX")
     
     fyc_data <- MEPS::read_MEPS(type = "FYC", year=year) %>% 
       select(all_of(select_variables), matches("^(PRI|MCR|MCD)(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\d{2}$"),
              matches("^INS(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\d{2}X$")) %>% 
       rename_with(~paste0("PERWTYYF", recycle0=T), starts_with("PERWT")) %>% 
+      rename_with(~paste0("INSCOVYY", recycle0=T), starts_with("INSCOV")) %>% 
+      rename_with(~paste0("REGIONYY", recycle0=T), starts_with("REGION")) %>% 
+      rename_with(~paste0("POVLEVYY", recycle0=T), starts_with("POVLEV")) %>% 
       rename_with(~paste0("TOTEXPYY", recycle0=T), starts_with("TOTEXP")) %>% 
       rename_with(~paste0("TOTPRVYY", recycle0=T), starts_with("TOTPRV")) %>% 
       rename_with(~paste0("TOTMCRYY", recycle0=T), starts_with("TOTMCR")) %>% 
@@ -100,6 +106,11 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = T)
     # later when comparing base year scores to projection year expenditures.
     fyc_data <- fyc_data %>% 
       mutate(DUPERSID = if_else(meps_year >= 2018, str_sub(DUPERSID, start=3L, end=-1L), DUPERSID))
+    
+    if(year >= 2018) {
+      fyc_data <- fyc_data %>% 
+        rename(DIABDX = DIABDX_M18)
+    }
   
     fyc_datasets <- fyc_datasets %>% 
       union_all(fyc_data)
@@ -109,6 +120,87 @@ meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = T)
   survey_weights <- fyc_datasets %>% 
     select(DUPERSID, meps_year, PERWTYYF, VARPSU, VARSTR) %>% 
     write_csv(here::here("etc/outputs/survey_weights.csv"))
+  
+  #### Output categorical variables related to health conditions, demographics, etc. ####
+  survey_data_factors <- fyc_datasets %>% 
+    select(DUPERSID, meps_year, TOTEXPYY, SEX, INSCOVYY, REGIONYY, RACETHX, POVLEVYY,
+           CHDDX, ANGIDX, MIDX, OHRTDX,  DIABDX, HIBPDX, CHOLDX, 
+           ASTHDX, ARTHDX, CANCERDX, STRKDX) %>% 
+    mutate(INSCOV_DSC = case_when(INSCOVYY == 1 ~ "Any Private",
+                                  INSCOVYY == 2 ~ "Public Only",
+                                  INSCOVYY == 3 ~ "Uninsured",
+                                  T ~ as.character(INSCOVYY))) %>% 
+    mutate(UNINS_FLG_DSC = case_when(INSCOVYY == 3 ~ "Uninsured",
+                                     INSCOVYY != 3 ~ "Insured",
+                                     T ~ as.character(INSCOVYY))) %>% 
+    arrange(INSCOVYY) %>% 
+    mutate(INSCOV_DSC = forcats::fct_inorder(INSCOV_DSC),
+           UNINS_FLG_DSC = forcats::fct_inorder(UNINS_FLG_DSC)) %>% 
+    mutate(REG_DSC = case_when(REGIONYY == -1 ~ "Inapplicable",
+                               REGIONYY == 1 ~ "Northeast",
+                               REGIONYY == 2 ~ "Midwest",
+                               REGIONYY == 3 ~ "South",
+                               REGIONYY == 4 ~ "West",
+                               T ~ as.character(REGIONYY))) %>% 
+    arrange(REGIONYY) %>% 
+    mutate(REG_DSC = forcats::fct_inorder(REG_DSC)) %>% 
+    mutate(RACETHX_DSC = case_when(RACETHX == 1 ~ "Hispanic",
+                                   RACETHX == 2 ~ "Non-Hispanic White Only",
+                                   RACETHX == 3 ~ "Non-Hispanic Black Only",
+                                   RACETHX == 4 ~ "Non-Hispanic Asian Only",
+                                   RACETHX == 5 ~ "Non-Hispanic Other Race or Multiple Race",
+                                   T ~ as.character(RACETHX))) %>% 
+    arrange(RACETHX) %>% 
+    mutate(RACETHX_DSC = forcats::fct_inorder(RACETHX_DSC)) %>%
+    mutate(POVLEV_DSC = case_when(POVLEVYY < 100 ~ "Less than 100%",
+                                  POVLEVYY >= 100 & POVLEVYY < 150 ~ "100% to less than 150%",
+                                  POVLEVYY >= 150 & POVLEVYY < 400 ~ "150% to less than 400%",
+                                  POVLEVYY >= 400 ~ "400% or more",
+                                  T ~ as.character(POVLEVYY))) %>% 
+    arrange(POVLEVYY) %>% 
+    mutate(POVLEV_DSC = forcats::fct_inorder(POVLEV_DSC, ordered=T)) %>%   
+    mutate(HAS_EXP = if_else(TOTEXPYY > 0, "Had Healthcare Expenses", "Did Not Have Healthcare Expenses")) %>% 
+    mutate(HAS_EXP = forcats::fct_inorder(HAS_EXP)) %>%   
+    mutate(HDDX_DSC = case_when(CHDDX == 1 | ANGIDX == 1 | MIDX == 1 | OHRTDX == 1 ~ "Diagnosed with heart disease", 
+                                T ~ "Not diagnosed with heart disease, or Unknown/Inapplicable")) %>% 
+    mutate(HDDX_DSC = forcats::fct_inorder(HDDX_DSC)) %>%   
+    mutate(DIABDX_DSC = case_when(DIABDX == 1 ~ "Diagnosed with diabetes", 
+                                  DIABDX == 2 ~ "Not diagnosed with diabetes", 
+                                  T ~ "Unknown or Inapplicable")) %>% 
+    mutate(DIABDX_DSC = forcats::fct_inorder(DIABDX_DSC)) %>%   
+    mutate(STRKDX_DSC = case_when(STRKDX == 1 ~ "Diagnosed with having had a stroke", 
+                                  STRKDX == 2 ~ "Not diagnosed with having had a stroke", 
+                                  T ~ "Unknown or Inapplicable")) %>% 
+    mutate(STRKDX_DSC = forcats::fct_inorder(STRKDX_DSC)) %>%   
+    mutate(HIBPDX_DSC = case_when(HIBPDX == 1 ~ "Diagnosed with high blood pressure", 
+                                  HIBPDX == 2 ~ "Not diagnosed with high blood pressure", 
+                                  T ~ "Unknown or Inapplicable")) %>% 
+    mutate(HIBPDX_DSC = forcats::fct_inorder(HIBPDX_DSC)) %>%   
+    mutate(CHOLDX_DSC = case_when(CHOLDX == 1 ~ "Diagnosed with high cholesterol", 
+                                  CHOLDX == 2 ~ "Not diagnosed with high cholesterol", 
+                                  T ~ "Unknown or Inapplicable")) %>% 
+    mutate(CHOLDX_DSC = forcats::fct_inorder(CHOLDX_DSC)) %>%   
+    mutate(ASTHDX_DSC = case_when(ASTHDX == 1 ~ "Diagnosed with asthma", 
+                                  ASTHDX == 2 ~ "Not diagnosed with asthma", 
+                                  T ~ "Unknown or Inapplicable")) %>% 
+    mutate(ASTHDX_DSC = forcats::fct_inorder(ASTHDX_DSC)) %>% 
+    mutate(ARTHDX_DSC = case_when(ARTHDX == 1 ~ "Diagnosed with arthritis", 
+                                  ARTHDX == 2 ~ "Not diagnosed with arthritis", 
+                                  T ~ "Unknown or Inapplicable")) %>% 
+    mutate(ARTHDX_DSC = forcats::fct_inorder(ARTHDX_DSC)) %>% 
+    mutate(CANCERDX_DSC = case_when(CANCERDX == 1 ~ "Diagnosed with cancer", 
+                                    CANCERDX == 2 ~ "Not diagnosed with cancer", 
+                                    T ~ "Unknown or Inapplicable")) %>% 
+    mutate(CANCERDX_DSC = forcats::fct_inorder(CANCERDX_DSC)) %>% 
+    mutate(ATLEASTONE_CHRONIC_DSC = case_when((CHDDX == 1 | ANGIDX == 1 | MIDX == 1 | OHRTDX == 1 | DIABDX == 1 | HIBPDX == 1 | CHOLDX == 1 | ASTHDX == 1 | ARTHDX == 1 | CANCERDX == 1 | STRKDX == 1) ~ "Diagnosed with one or more of these conditions", 
+                                              T ~ "Not diagnosed with one or more of these conditions, or Unknown/Inapplicable")) %>% 
+    mutate(CANCERDX_DSC = forcats::fct_inorder(CANCERDX_DSC)) %>% 
+    mutate(SEX_DSC = if_else(SEX == 1, "Male", if_else(SEX == 2, "Female", "Unknown"))) %>% 
+    mutate(SEX_DSC = forcats::fct_inorder(SEX_DSC)) %>% 
+    select(-c(TOTEXPYY, SEX, INSCOVYY, REGIONYY, RACETHX, POVLEVYY,
+                         CHDDX, ANGIDX, MIDX, OHRTDX,  DIABDX, HIBPDX, CHOLDX, 
+                         ASTHDX, ARTHDX, CANCERDX, STRKDX)) %>% 
+    write_csv(here::here("etc/outputs/survey_data_factors.csv"))
   
   #### Organize Exposure Calculations
   # Determine PMPM Costs by Payor (PRV + MCR + MCD + SLF + OTH = TOT)

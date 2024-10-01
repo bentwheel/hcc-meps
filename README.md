@@ -296,7 +296,7 @@ PMPM costs for each age band are, across all years evaluated.
 
 ![](README_files/figure-gfm/a2e_ne_age_gender-1.png)<!-- -->
 
-### New Enrollee Model - Predictive Ratios for Entire Population, by Risk Score Quintile
+### New Enrollee Model - Predictive Ratios for Entire Population, by Total Cost Quintile
 
 This isn’t terrible performance, given that this is based on survey
 data. But risk adjuster models should be able to deliver accurate
@@ -308,9 +308,14 @@ gender).
 
 ![](README_files/figure-gfm/a2e_ne_risk-1.png)<!-- -->
 
-The predictive accuracy here leaves much to be desired. Let’s see if
-using a risk score model with a much higher R-squared value will get our
-predictions closer to the pin…
+The predictive accuracy here leaves much to be desired. Being able to
+predict which members will turn up in the upper deciles healthcare
+spending is an important part of opportunity analysis and proactive
+intervention / care management strategies. If that’s our objective this
+population, the NE model simply won’t do!
+
+Let’s see if using a risk score model with a higher R-squared value will
+get our predictions closer to the pin…
 
 ## Predictive Performance of the Community Non-Dual Aged Model
 
@@ -602,3 +607,28 @@ respondent. In the vast majority of cases, the mode score is equal to
 the average score, but this is, of course, not always the case.
 
 ![](README_files/figure-gfm/rsq_cna-1.png)<!-- -->
+
+As we can see, model predictive performance (measured by R-Squared)
+improves substantially when using a model that builds risk score weights
+based on not just demographic factors, but also diagnosis code inputs.
+
+### Community non-dual aged model - Predictive Ratios for Entire Population, by Age and Gender
+
+As stated earlier, one of the most important uses of a risk adjuster
+model is to accurately predict costs. Let’s see if cost projections
+broken out by age and gender groups using the more performant CNA model
+are closer to actuals than the predictions we got from the NE model
+earlier. Once again, we’ll plot predicted vs. actual costs, grouped by
+age and gender, in order to evaluate how close (or far off) the
+predicted PMPM costs for each age band are, across all years evaluated.
+
+Our hope is that the CNA model predictions will come a lot closer to the
+actual outcomes than the NE model predictions…
+
+![](README_files/figure-gfm/a2e_cna_age_gender-1.png)<!-- -->
+
+…and that hope is confirmed by this plot, demonstrating that in almost
+every single age/gender category, the CMS-HCC CNA models outperform the
+NE models in producing accurate total cost projections!
+
+![](README_files/figure-gfm/a2e_cna_risk-1.png)<!-- -->

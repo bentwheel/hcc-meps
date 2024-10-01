@@ -10,7 +10,8 @@ always_allow_html: true
 knitr::opts_chunk$set(echo = TRUE)
 
 # Custom color pallette
-cp <- rev(c('#d7191c','#fdae61','#ffffbf','#abd9e9','#2c7bb6'))
+cp <- rev(c('#d73027','#fc8d59','#fee090','#ffffbf','#e0f3f8','#91bfdb','#4575b4'))
+
 ```
 
 # Project Overview
@@ -374,46 +375,42 @@ a2e_by_age_gender_NE.plot
 
 ```
 
-### New Enrollee Model - Predictive Ratios for Entire Population, by Risk Score Quintile
+### New Enrollee Model - Predictive Ratios for Entire Population, by Total Cost Tertile
 
 This isn't terrible performance, given that this is based on survey data. But risk adjuster models should be able to deliver accurate predictions for all slices and dices of the population. The accuracy of predictions breaks down rather quickly when we cut the data along groups that are irrelevant to the model (unlike as in the visualization in the previous section, where the score model's primary inputs are age and gender).
 
-```{r a2e_ne_risk, echo=FALSE, fig.height=8.5, fig.width=11, message=FALSE, warning=FALSE}
+```{r a2e_ne_race, echo=FALSE, fig.height=8.5, fig.width=11, message=FALSE, warning=FALSE}
 
 # Read in cost projections 
 cna_pop_pmpm_pred <- read_csv(here::here("etc/outputs/cna_population_pred_costs.csv"))
 
+# Read in categorical factors and levels and join
+survey_data_factors <- read_csv(here::here("etc/outputs/survey_data_factors.csv"))
+
 #### A-to-E plots for NE models - BY AGE ####
-a2e_by_quintile_NE.data <- cna_pop_pmpm_pred %>% 
+a2e_by_raceth_NE.data <- cna_pop_pmpm_pred %>% 
   filter(model == "NE") %>% 
-  group_by(version) %>% 
-  mutate(scoreBin = ntile(score_norm, 5)) %>% 
-  mutate(bin_dsc = case_when(
-    scoreBin == 1 ~ "0 - 20",
-    scoreBin == 2 ~ "20 - 40",
-    scoreBin == 3 ~ "40 - 60",
-    scoreBin == 4 ~ "60 - 80",
-    scoreBin == 5 ~ "80 - 100")) %>% 
-  ungroup() %>% 
-  group_by(version, bin_dsc) %>% 
+  left_join(survey_data_factors) %>% 
+  group_by(version, RACETHX_DSC) %>% 
   summarize(Actual_pmpm = weighted.mean(cost_pmpm_act, w=exposure_months),
             Expected_pmpm = weighted.mean(cost_pmpm_pred, w=exposure_months),
             count = n()) %>%
   ungroup() %>% 
   pivot_longer(
-    cols = -c(bin_dsc, version, count),
+    cols = -c(RACETHX_DSC, version, count),
     names_to = "Label",
     values_to = "Value",
     names_pattern = "^(Actual|Expected)_pmpm$"
   )  %>% 
   filter(!(Label == "Actual" & version == 28)) %>%  # v24 and v28 actuals are identical - need to remove one
   mutate(Label = if_else(Label == "Actual", "Actual", paste0("CMS-HCC v", version, " NE Predicted"))) %>% 
-  arrange(bin_dsc, Label) %>% 
+  arrange(RACETHX_DSC, Label) %>% 
   mutate(Label = fct_inorder(Label)) %>% 
-  mutate(bin_dsc = fct_inorder(paste0(bin_dsc, "\n(n = ", scales::label_comma(accuracy=1)(count), ")")))
-
-a2e_by_quintile_NE.plot <- a2e_by_quintile_NE.data %>% 
-  ggplot(aes(x = bin_dsc,
+  mutate(RACETHX_DSC= fct_inorder(paste0(str_wrap(RACETHX_DSC, 20), "\n(n = ", scales::label_comma(accuracy=1)(count), ")")))
+                                  
+                                  
+a2e_by_raceth_NE.plot <- a2e_by_raceth_NE.data %>% 
+  ggplot(aes(x = RACETHX_DSC,
              y = Value,
              fill = Label)) + 
   geom_bar(stat="identity", position=position_dodge2(width=.9),
@@ -421,22 +418,23 @@ a2e_by_quintile_NE.plot <- a2e_by_quintile_NE.data %>%
   geom_text(aes(label = scales::label_dollar(accuracy=1)(Value)),
             size = 3, position=position_dodge2(width=.9), vjust=-.8) +
   scale_fill_manual(values = cp) +
-  scale_y_continuous(labels = scales::label_dollar(accuracy=1),
-                     limits=c(0,1000)) +
+  scale_y_continuous(labels = scales::label_dollar(accuracy=1)) +
   theme_bw() + 
   labs(
     title = "Actual Costs vs. Costs Predicted by CMS-HCC New Enrollee Models",
     subtitle = "Using Medical Expenditure Panel Data (MEPS) PUFs Datasets as Inputs",
-    x = "Risk Score Quintile",
+    x = "Race & Ethnicity",
     y = "Per Member, Per Month (PMPM) Costs (Medicare Only)",
     fill = "Value") +
   theme(legend.position = "bottom")
 
-a2e_by_quintile_NE.plot
+a2e_by_raceth_NE.plot
 
 ```
 
-The predictive accuracy here leaves much to be desired. Let's see if using a risk score model with a much higher R-squared value will get our predictions closer to the pin...
+The predictive accuracy here leaves much to be desired. Being able to predict member spending among diverse populations is an important primary objective of risk adjustment. For predictive modeling applications in healthcare, the NE just isn't very useful outside of predicting expenditures for populations where diagnosis information is not available. Some information, after all, is better than none at all.
+
+Let's see if using a risk score model with a higher R-squared value will get our predictions closer to the pin...
 
 ## Predictive Performance of the Community Non-Dual Aged Model
 
@@ -504,8 +502,8 @@ rsq_eval_CNA.plot <- rsq_eval_CNA.data %>%
              fill = model)) +
   geom_bar(stat = "identity", position="dodge2",
            color="gray20") + 
-  geom_text(aes(label=scales::label_percent(accuracy=.01)(rsq)),
-            position=position_dodge2(width=.9), vjust=-.8, size=3) +
+  geom_text(aes(label=scales::label_percent(accuracy=.1)(rsq)),
+            position=position_dodge2(width=.9), vjust=-.8, size=2.5) +
   theme_classic() +
   scale_fill_manual(values = cp) +
   scale_y_continuous(labels = scales::label_percent(accuracy=.1)) +
@@ -518,5 +516,135 @@ rsq_eval_CNA.plot <- rsq_eval_CNA.data %>%
 rsq_eval_CNA.plot
 ```
 
+As we can see, model predictive performance (measured by R-Squared) improves substantially when using a model that builds risk score weights based on not just demographic factors, but also diagnosis code inputs.
 
-... this is a work in progress. More coming soon!
+### Community non-dual aged model - Predictive Ratios for Entire Population, by Age and Gender
+
+As stated earlier, one of the most important uses of a risk adjuster model is to accurately predict costs. Let's see if cost projections broken out by age and gender groups using the more performant CNA model are closer to actuals than the predictions we got from the NE model earlier. Once again, we'll plot predicted vs. actual costs, grouped by age and gender, in order to evaluate how close (or far off) the predicted PMPM costs for each age band are, across all years evaluated. 
+
+Our hope is that the CNA model predictions will come a lot closer to the actual outcomes than the NE model predictions...
+
+```{r a2e_cna_age_gender, echo=FALSE, fig.height=8.5, fig.width=11, message=FALSE, warning=FALSE}
+
+# Read in cost projections 
+cna_pop_pmpm_pred <- read_csv(here::here("etc/outputs/cna_population_pred_costs.csv"))
+
+# Read in demographic info
+demographics <- read_csv(here::here("etc/outputs/demographics.csv")) 
+
+# Demographic labels for more nuanced A2E plots later
+demos_for_eval <- demographics %>% 
+  mutate(meps_year = meps_year + 1) %>% 
+  mutate(AGE_GRP = case_when(
+    AGE_EXACT < 65 ~ "Under 65",
+    AGE_EXACT < 70 ~ "65 - 69",
+    AGE_EXACT < 75 ~ "70 - 74",
+    AGE_EXACT < 80 ~ "75 - 79",
+    AGE_EXACT < 85 ~ "80 - 84",
+    AGE_EXACT >= 85 ~ "Over 85")) %>% 
+  arrange(AGE_EXACT) %>% 
+  mutate(AGE_GRP = forcats::fct_inorder(AGE_GRP)) %>% 
+  select(-AGE_EXACT)
+
+#### A-to-E plots for NE and CNA models - BY AGE/GENDER ####
+a2e_by_age_gender_CNA.data <- cna_pop_pmpm_pred %>% 
+  left_join(demos_for_eval) %>% 
+  group_by(AGE_GRP, SEX, model, version, calculation) %>% 
+  summarize(Actual_pmpm = weighted.mean(cost_pmpm_act, w=exposure_months),
+            Expected_pmpm = weighted.mean(cost_pmpm_pred, w=exposure_months),
+            count = n()) %>%
+  ungroup() %>% 
+  pivot_longer(
+    cols = -c(AGE_GRP, SEX, model, version, calculation, count),
+    names_to = "Label",
+    values_to = "Value",
+    names_pattern = "^(Actual|Expected)_pmpm$"
+  ) %>% 
+  filter((Label == "Actual" & version == 24 & calculation == "avg" & model == "CNA") | Label == "Expected") %>%  
+  mutate(Label = if_else(Label == "Actual", "Actual", paste0("CMS-HCC v", version, " (", model, ", ", str_to_title(calculation), ")"))) %>% 
+  mutate(Label = fct_inorder(Label)) %>% 
+  mutate(AGE_GRP = fct_inorder(paste0(AGE_GRP, "\n(n = ", scales::label_comma(accuracy=1)(count), ")"))) %>% 
+  mutate(Gender = if_else(SEX == "M", "Male", "Female"))
+
+a2e_by_age_gender_CNA.plot <- a2e_by_age_gender_CNA.data %>% 
+  ggplot(aes(x = AGE_GRP,
+             y = Value,
+             fill = Label)) + 
+  geom_bar(stat="identity", position=position_dodge2(width=.9),
+           color="gray20") + 
+  geom_text(aes(label = scales::label_dollar(accuracy=1)(Value)),
+            size = 3, position=position_dodge2(width=.9), vjust=-.8) +
+  scale_fill_manual(values = cp) +
+  scale_y_continuous(labels = scales::label_dollar(accuracy=1),
+                     limits=c(0,1150)) +
+  theme_bw() + 
+  labs(
+    title = "Actual Costs vs. Costs Predicted by CMS-HCC NE and CNA Models",
+    subtitle = "Using Medical Expenditure Panel Data (MEPS) PUFs Datasets as Inputs",
+    x = "Age Group",
+    y = "Per Member, Per Month (PMPM) Costs (Medicare Only)",
+    fill = "Value") +
+  theme(legend.position = "bottom") +
+  facet_wrap(Gender~., nrow=2, scales = "free_x")
+
+a2e_by_age_gender_CNA.plot
+
+```
+
+...and that hope is confirmed by this plot, demonstrating that in almost every single age/gender category, the CMS-HCC CNA models outperform the NE models in producing accurate total cost projections!
+
+```{r a2e_cna_race, echo=FALSE, fig.height=8.5, fig.width=11, message=FALSE, warning=FALSE}
+
+# Read in cost projections 
+cna_pop_pmpm_pred <- read_csv(here::here("etc/outputs/cna_population_pred_costs.csv"))
+
+# Read in categorical factors and levels and join
+survey_data_factors <- read_csv(here::here("etc/outputs/survey_data_factors.csv"))
+
+#### A-to-E plots for NE models - BY AGE ####
+a2e_by_raceth_CNA.data <- cna_pop_pmpm_pred %>% 
+  filter(model == "CNA" & calculation == "avg") %>% 
+  left_join(survey_data_factors) %>% 
+  group_by(version, RACETHX_DSC) %>% 
+  summarize(Actual_pmpm = weighted.mean(cost_pmpm_act, w=exposure_months),
+            Expected_pmpm = weighted.mean(cost_pmpm_pred, w=exposure_months),
+            count = n()) %>%
+  ungroup() %>% 
+  pivot_longer(
+    cols = -c(RACETHX_DSC, version, count),
+    names_to = "Label",
+    values_to = "Value",
+    names_pattern = "^(Actual|Expected)_pmpm$"
+  )  %>% 
+  filter(!(Label == "Actual" & version == 28)) %>%  # v24 and v28 actuals are identical - need to remove one
+  mutate(Label = if_else(Label == "Actual", "Actual", paste0("CMS-HCC v", version, " CNA Predicted"))) %>% 
+  arrange(RACETHX_DSC, Label) %>% 
+  mutate(Label = fct_inorder(Label)) %>% 
+  mutate(RACETHX_DSC= fct_inorder(paste0(str_wrap(RACETHX_DSC, 20), "\n(n = ", scales::label_comma(accuracy=1)(count), ")")))
+                                  
+                                  
+a2e_by_raceth_CNA.plot <- a2e_by_raceth_CNA.data %>% 
+  ggplot(aes(x = RACETHX_DSC,
+             y = Value,
+             fill = Label)) + 
+  geom_bar(stat="identity", position=position_dodge2(width=.9),
+           color="gray20") + 
+  geom_text(aes(label = scales::label_dollar(accuracy=1)(Value)),
+            size = 3, position=position_dodge2(width=.9), vjust=-.8) +
+  scale_fill_manual(values = cp) +
+  scale_y_continuous(labels = scales::label_dollar(accuracy=1)) +
+  theme_bw() + 
+  labs(
+    title = "Actual Costs vs. Costs Predicted by CMS-HCC Community Non-Dual Aged Models",
+    subtitle = "Using Medical Expenditure Panel Data (MEPS) PUFs Datasets as Inputs",
+    x = "Race & Ethnicity",
+    y = "Per Member, Per Month (PMPM) Costs (Medicare Only)",
+    fill = "Value") +
+  theme(legend.position = "bottom")
+
+a2e_by_raceth_CNA.plot
+
+```
+
+The CNA predictions by race and ethnicity are substantially improved over the predictions produced by the CMS-HCC NE model for both versions 24 and 28. 
+
