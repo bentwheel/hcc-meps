@@ -19,7 +19,7 @@ library(MEPS)
 #     (e.g., all I10. dx codes). This won't impact score outputs, but DX profile simulations will be far more simple
 #     and the process will run substantially faster.
 # - sample_prop - percentage of MEPS respondents to sample (used primarily for testing)
-main <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = T, sample_prop = 1) {
+main <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = T, sample_prop = 1) {
   
   # Prepare ICD-10-CM to CCSR Crossmap Files for each year, 2016 - 2022
   source(here::here("src/ahrq-ccsr-prep.R"))
@@ -36,7 +36,7 @@ main <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = T, sample_prop = 1) {
   load(here::here(paste0("etc/contingencies_n=",n_dx_sim,".rda")))
   
   # Load Reticulate + Python functions for running hccpy RA score models for each individual x ICD10CM profile
-  source("src/cms-hcc-run.R")
+  source(here::here("src/cms-hcc-run.R"))
   
   # One day we'll run HHS-HCC on the commercial population, too - but for now we're just doing Medicare benes
   contingencies_to_run_cmshcc <- contingencies_to_run
@@ -82,8 +82,11 @@ main <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = T, sample_prop = 1) {
     unnest(cols = c(mode_hcc_values))  
   
   save(mode_hcc_values, file=here::here("etc/outputs/mode_hcc_values.rda"))
+  load(here::here("etc/outputs/mode_hcc_values.rda"))
   
-  # Postprocessing content to one day go here!
+  source(here::here("src/normalize-scores.R"))
+  normalize_scores()
+
 }
 
 main()

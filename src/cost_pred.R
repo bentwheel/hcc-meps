@@ -16,99 +16,29 @@ demographics <- read_csv(here::here("etc/outputs/demographics.csv")) %>%
 risk_scores <- read_csv(here::here("etc/outputs/cna_population_scores.csv"))
 
 #### Develop Cost Predictions ####
-# Get expenditures/expos for individuals
-expenditures_pmpm <- read_csv("etc/outputs/expenditures_pmpm.csv") %>% 
-  mutate(DUPERSID = as.character(DUPERSID),
-         meps_year = as.character(meps_year)) %>% 
+# Get Actual Medicare costs for the subsequent year, for each year, for each member in the CNA population
+cna_pop_pmpm_act <- read_csv(here::here("etc/outputs/expenditures_pmpm.csv")) %>% 
   filter(Type == "MCR") %>% 
-  pivot_wider(names_from = Type,
-              values_from = c(Cost, Cost_noRX, Expos, PMPM_Cost, PMPM_Cost_noRX))
+  filter(meps_year != 2016) %>%  # We don't have 2015 prospective scores to scale with 2016 PMPM totals in this dataset
+  mutate(meps_year = meps_year - 1) %>% # We want to apply 2017 PMPM averages to 2016 scores, 2018 PMPM avg to 2017 scores, etc.
+  inner_join(risk_scores %>% distinct(DUPERSID, meps_year)) # Filtration join for correct PMPM calcs 
+ 
+# Develop PMPM averages by year for risk score scaling
+average_pmpm_cna_pop <- cna_pop_pmpm_act %>% 
+  group_by(meps_year) %>% 
+  summarize(total_exp_months = sum(Expos, na.rm=T),
+            total_cost = sum(Cost, na.rm=T),
+            total_cost_norx = sum(Cost_noRX, na.rm=T)) %>% 
+  mutate(avg_cost_pmpm = total_cost / total_exp_months,
+         avg_cost_pmpm_norx = total_cost_norx / total_exp_months)
 
-# Helper function to align scores for [meps_year] with PMPM costs for [meps_year+1] and
-# calculate A/E ratios at the individual level
-test_pred_NE <- function(base_year = 2016, proj_year = base_year+1, base_min_expos=0, proj_min_expos=1)
-{
-  # Get base year pool list of IDs by minimum expos, filtered on minimume xposure requirements in args
-  base_pool <- expenditures_pmpm %>% 
-    mutate(DUPERSID = as.character(DUPERSID),
-           meps_year = as.character(meps_year)) %>% 
-    filter(meps_year == base_year,
-           Expos_MCR >= base_min_expos) %>% 
-    select(DUPERSID, meps_year) %>% 
-    inner_join(demographics %>% distinct(DUPERSID, meps_year))
-  
-  # Get the target expenditures for this population and scale normalized scores for A/E
-  proj_expenditures <- expenditures_pmpm %>% 
-    mutate(DUPERSID = as.character(DUPERSID),
-           meps_year = as.character(meps_year)) %>% 
-    filter(meps_year == proj_year) %>% 
-    filter(Expos_MCR >= proj_min_expos) %>% 
-    select(DUPERSID, meps_year, Cost_MCR, Cost_noRX_MCR, Expos_MCR, PMPM_Cost_MCR, PMPM_Cost_noRX_MCR) %>% 
-    select(-meps_year) %>% 
-    inner_join(base_pool) %>% 
-    inner_join(scores_eval_NE_norm) %>% 
-    group_by(elig_args) %>% 
-    mutate(AvgPMPM_MCR = sum(Cost_MCR) / sum(Expos_MCR),
-           AvgPMPM_noRX_MCR = sum(Cost_noRX_MCR) / sum(Expos_MCR)) %>% 
-    mutate(across(
-      .cols = matches("^v(24|28)_(mode|avg)_norm$"),
-      .fns = list(pred = function(x) { AvgPMPM_MCR * x}),
-      .names = "{.col}_pred_wRX"
-    )) %>% 
-    mutate(across(
-      .cols = matches("^v(24|28)_(mode|avg)_norm$"),
-      .fns = list(pred = function(x) { AvgPMPM_noRX_MCR * x}),
-      .names = "{.col}_pred_noRX"
-    ))
-  
-  proj_expenditures %>% select(-meps_year)
-}
-
-# Helper function to align scores for [meps_year] with PMPM costs for [meps_year+1] and
-# calculate A/E ratios at the individual level
-test_pred_CNA <- function(base_year = 2016, proj_year = base_year+1, base_min_expos=0, proj_min_expos=1,
-                          remove_cens_dx_benes = T)
-{
-  # Get base year pool list of IDs by minimum expos
-  base_pool <- expenditures_pmpm %>% 
-    mutate(DUPERSID = as.character(DUPERSID),
-           meps_year = as.character(meps_year)) %>% 
-    filter(meps_year == base_year,
-           Expos_MCR >= base_min_expos) %>% 
-    select(DUPERSID, meps_year) %>% 
-    inner_join(demographics %>% distinct(DUPERSID, meps_year, CensoredDXFlag))
-  
-  if(remove_cens_dx_benes) {
-    base_pool <- base_pool %>% 
-      filter(is.na(CensoredDXFlag))
-  }
-  
-  # Get the target expenditures for this population and scale normalized scores for A/E
-  proj_expenditures <- expenditures_pmpm %>% 
-    mutate(DUPERSID = as.character(DUPERSID),
-           meps_year = as.character(meps_year)) %>% 
-    filter(meps_year == proj_year) %>% 
-    filter(Expos_MCR >= proj_min_expos) %>% 
-    select(DUPERSID, meps_year, Cost_MCR, Cost_noRX_MCR, Expos_MCR, PMPM_Cost_MCR, PMPM_Cost_noRX_MCR) %>% 
-    select(-meps_year) %>% 
-    inner_join(base_pool) %>% 
-    inner_join(scores_eval_CNA_norm) %>% 
-    group_by(elig_args) %>% 
-    mutate(AvgPMPM_MCR = sum(Cost_MCR) / sum(Expos_MCR),
-           AvgPMPM_noRX_MCR = sum(Cost_noRX_MCR) / sum(Expos_MCR)) %>% 
-    mutate(across(
-      .cols = matches("^v(24|28)_(mode|avg)_norm$"),
-      .fns = list(pred = function(x) { AvgPMPM_MCR * x}),
-      .names = "{.col}_pred_wRX"
-    )) %>% 
-    mutate(across(
-      .cols = matches("^v(24|28)_(mode|avg)_norm$"),
-      .fns = list(pred = function(x) { AvgPMPM_noRX_MCR * x}),
-      .names = "{.col}_pred_noRX"
-    ))
-  
-  proj_expenditures %>% select(-meps_year)
-}
+# Scale risk scores
+cna_pop_pmpm_pred <- risk_scores %>% 
+  left_join(average_pmpm_cna_pop %>% select(meps_year, avg_cost_pmpm_actual = avg_cost_pmpm)) %>% 
+  mutate(cost_pmpm_pred = avg_cost_pmpm_actual * score_norm) %>% 
+  left_join(cna_pop_pmpm_act %>% select(DUPERSID, meps_year, cost_pmpm_act = PMPM_Cost)) %>% 
+  mutate(meps_year = meps_year + 1) %>%  # Post-join, this should reflect accurate year for cost actuals vs. predictions
+  write_csv(here::here("etc/outputs/cna_population_pred_costs.csv"))
 
 # Demographic labels for more nuanced A2E plots later
 demos_for_eval <- demographics %>% 
@@ -125,67 +55,35 @@ demos_for_eval <- demographics %>%
   mutate(AGE_GRP = forcats::fct_inorder(AGE_GRP)) %>% 
   select(-AGE_EXACT)
 
-# Build 2016-2021 base year projections
-# Set min_expos variables to dial into more stringent exposure requirements for comparisons
-projections_NE <- as_tibble(seq(2016,2021,by=1)) %>% 
-  rename(meps_year = value) %>% 
-  mutate(projections = purrr::map(meps_year, function(x) {test_pred_NE(base_year=x, base_min_expos = 0, proj_min_expos = 1)})) %>% 
-  unnest(cols = "projections") %>% 
-  mutate(meps_year = as.character(meps_year)) %>% 
-  left_join(demos_for_eval) %>% 
-  write_csv("etc/outputs/predictions_NE.csv") 
-
-projections_CNA <- as_tibble(seq(2016,2021,by=1)) %>% 
-  rename(meps_year = value) %>% 
-  mutate(projections = purrr::map(meps_year, function(x) {test_pred_CNA(base_year=x, base_min_expos = 0, 
-                                                                        proj_min_expos = 12,
-                                                                        remove_cens_dx_benes = F)})) %>% 
-  unnest(cols = "projections") %>% 
-  mutate(meps_year = as.character(meps_year)) %>% 
-  left_join(demos_for_eval) %>% 
-  write_csv("etc/outputs/predictions_CNA.csv")
+esrd_individuals <- read_csv(here::here("etc/outputs/esrd_individuals.csv")) %>% 
+  mutate(esrd_dx = T)
 
 #### R-Squared Plot for NE Models by MEPS Year ####
 # Evaluate r-sq by meps_year for NE. Should focus only on the pop. for which the NE is intended.
-rsq_check_NE <- projections_NE %>% 
-  select(DUPERSID, meps_year, PMPM_Cost_MCR, PMPM_Cost_noRX_MCR, elig_args, 
-         matches("^v(24|28)_(mode|avg)_norm_pred_(wRX|noRX)")) %>% 
-  pivot_longer(
-    cols = -c(DUPERSID,meps_year,elig_args,PMPM_Cost_MCR,PMPM_Cost_noRX_MCR),
-    names_to = c("model", "calc", "RX_noRX"),
-    names_pattern = "^v(24|28)_(mode|avg)_norm_pred_(wRX|noRX)$",
-    values_to = "PMPM_Cost_MCR_Pred"
-  ) %>% 
-  pivot_wider(
-    names_from = RX_noRX,
-    values_from = PMPM_Cost_MCR_Pred,
-  ) %>% 
-  group_by(meps_year, elig_args, model, calc) %>% 
-  summarize(rsq_wRX = cor(PMPM_Cost_MCR, wRX)^2,
-            rsq_noRX = cor(PMPM_Cost_noRX_MCR, noRX)^2,
+rsq_eval_NE.data <- cna_pop_pmpm_pred %>% 
+  filter(model == "NE") %>% 
+  group_by(meps_year, version) %>% 
+  summarize(rsq = cor(cost_pmpm_act, cost_pmpm_pred)^2,
             count = n()) %>% 
-  pivot_longer(
-    cols = -c(meps_year, elig_args, model, calc, count),
-    names_to = "Target",
-    values_to = "R-Squared") %>% 
-  unite(calc, Target, col="calc")
-    
-rsq_eval_NE.plot <- rsq_check_NE %>% 
-  mutate(meps_year = fct_inorder(paste0(meps_year, "\n(n = ", count, ")"))) %>% 
-  mutate(model = paste0("CMS-HCC v", model, " NE")) %>% 
-  filter(elig_args == "NE",
-         calc == "mode_rsq_wRX") %>% 
+  ungroup() %>% 
+  mutate(meps_year = meps_year - 1) #Since this is an evaluation of scores, more intuitive to frame in terms of base year
+  
+rsq_eval_NE.plot <- rsq_eval_NE.data %>% 
+  mutate(meps_year = fct_inorder(paste0(meps_year, "\n(n = ", scales::label_comma(accuracy=1)(count), ")"))) %>% 
+  mutate(model = paste0("CMS-HCC v", version, " NE")) %>% 
   ggplot(aes(x = meps_year,
-             y = `R-Squared`,
+             y = rsq,
              fill = model)) +
-  geom_bar(stat = "identity", position="dodge2") + 
-  geom_text(aes(label=scales::label_percent(accuracy=.1)(`R-Squared`)),
-            position=position_dodge2(width=.9), vjust=-.8, size=2.5) +
+  geom_bar(stat = "identity", position="dodge2",
+           color="gray20") + 
+  geom_text(aes(label=scales::label_percent(accuracy=.01)(rsq)),
+            position=position_dodge2(width=.9), vjust=-.8, size=2.2) +
   theme_classic() +
   scale_fill_viridis_d(end = 0.5) +
   scale_y_continuous(labels = scales::label_percent(accuracy=.1)) +
   labs(title = "Predictive Performance of CMS-HCC New Enrollee Models",
        subtitle = "Using Medical Expenditure Panel Data (MEPS) PUFs Datasets as Inputs",
+       y = "R-Squared",
        x = "MEPS Data Input Year",
        fill = "Model")
 

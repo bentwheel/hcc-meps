@@ -14,3 +14,8 @@ risk_scores.rda
 esrd_individuals.csv
 predictions_CNA.csv
 predictions_NE.csv
+cna_population_pred_costs.csv
+cna_population_scores.csv
+mcr_benes.csv
+mcr_benes_no_duals.csv
+survey_weights.csv

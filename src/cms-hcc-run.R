@@ -35,17 +35,17 @@ cms_hcc_run <- function(data) {
   # py_config()
   
   # Arguments for HCC model to build cartesian cross join with inputs
-  elig_args <- c("CFA","CNA","NE") %>% 
+  elig_args <- c("CNA","NE") %>% 
     as_tibble() %>% 
     rename(elig_args = value) 
   
-  # Original entitlement args - only run scores as if entitlement was by age-in or disability, ignore ESRD for now.
+  # Original entitlement args - only run scores as if entitlement was by age-in only, ignore disability/ESRD for now.
   orec_args <- c(0) %>% 
     as_tibble() %>% 
     rename(orec_args = value)
   
-  # Medicaid bool values for HCC model
-  mcaid_args <- c(T,F) %>% 
+  # Medicaid bool values for HCC model - will assume for now that all benes are CNA (no Medicaid)
+  mcaid_args <- c(F) %>% 
     as_tibble() %>% 
     rename(mcaid_args = value)
   

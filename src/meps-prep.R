@@ -37,7 +37,7 @@ options(scipen = 999)
 #     couldn't possibly map to an HCC in v24 or v28 are removed entirely from the simulation process unless
 #     they map to a full ICD-10-CM code with probability of 1 based on the ICD-10-CM frequency distribution file.
 #     (e.g., all I10. dx codes). This won't impact score outputs, but DX profile simulations will be far more simple.
-meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
+meps_prep <- function(n_dx_sim = 500, sim_only_hcc_dxcodes = T)
 {
   
   ## PREPARE DEMOGRAPHICS INFO
@@ -105,6 +105,11 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
       union_all(fyc_data)
   }
   
+  #### Output sample weights and other important survey thingies
+  survey_weights <- fyc_datasets %>% 
+    select(DUPERSID, meps_year, PERWTYYF, VARPSU, VARSTR) %>% 
+    write_csv(here::here("etc/outputs/survey_weights.csv"))
+  
   #### Organize Exposure Calculations
   # Determine PMPM Costs by Payor (PRV + MCR + MCD + SLF + OTH = TOT)
   # Determine Exposures by Payor Coverage (PRV + MCR + MCD + UNI (uninsured) + OTH = TOT)
@@ -136,13 +141,34 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
     group_by(DUPERSID, meps_year, Type) %>% 
     summarize(Expos = sum(Enrolled)) %>% 
     ungroup() %>% 
-    group_by(DUPERSID, meps_year, Type) %>% 
     write_csv("./etc/outputs/exposures_total.csv")
   
-  # Identify list of only those with Medicare exposure - we won't risk score anyone else in this project.
-  covered_by_mcr <- fyc_data_expos_totals %>% 
-    filter(Type == "MCR" & Expos>0) %>% 
-    distinct(DUPERSID, meps_year)
+  # Identify all members who are impaneled across multiple years in MEPS AND,
+  # for all values of meps_year, who has at least one month of Medicare coverage in meps_year+1?
+  # This will be our target list for running the CMS-HCC model.
+  mcr_benes_to_score <- fyc_data_expos_totals %>% 
+    pivot_wider(names_from=Type,
+                values_from=Expos) %>% 
+    filter(meps_year != "2016") %>% # Since this is a filtration on payment/projection year, we don't need this
+    filter(MCR > 0) %>% 
+    distinct(DUPERSID, meps_year) %>% 
+    # Reduce the meps_year by 1 so it can be used along with DUPERSID as a filtering inner join
+    mutate(meps_year = as.character(as.numeric(meps_year) - 1))  %>% 
+    inner_join(fyc_data_expos_totals %>% 
+                 distinct(DUPERSID, meps_year)) %>% 
+    write_csv("./etc/outputs/mcr_benes.csv")
+
+  mcr_benes_to_score_no_duals <- fyc_data_expos_totals %>% 
+    pivot_wider(names_from=Type,
+                values_from=Expos) %>% 
+    filter(meps_year != "2016") %>% # Since this is a filtration on payment/projection year, we don't need this
+    filter(MCR > 0 & MCD == 0) %>% 
+    distinct(DUPERSID, meps_year) %>% 
+    # Reduce the meps_year by 1 so it can be used along with DUPERSID as a filtering inner join
+    mutate(meps_year = as.character(as.numeric(meps_year) - 1))  %>% 
+    inner_join(fyc_data_expos_totals %>% 
+                 distinct(DUPERSID, meps_year)) %>% 
+    write_csv("./etc/outputs/mcr_benes_no_duals.csv")
   
   # Now prepare a summary of expenditures by DUPERSID and meps_year
   fyc_expenditures_totals <- fyc_datasets %>% 
@@ -186,8 +212,8 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
   # summarized them in the previous section.
   
   ra_demos <- fyc_datasets %>% 
-    filter(DOBYY > 0 & DOBMM > 0) %>% 
-    inner_join(covered_by_mcr) %>% 
+    inner_join(mcr_benes_to_score_no_duals) %>% # Join against the first filter on MCR exposures > 1 in the payment year
+    filter(DOBYY > 0 & DOBMM > 0) %>%  # Can't risk adjust anyone without age info
     mutate(
       sex = case_when(
         SEX == 1 ~ "M",
@@ -195,18 +221,23 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
         .default = "U"),
       DOBYY = as.numeric(DOBYY),
       DOBMM = as.numeric(DOBMM),
-      DOBDD_max = days_in_month(mdy(paste(month(DOBMM, label=T), 1, DOBYY))),
-      DOBDD = map_int(DOBDD_max, ~floor(runif(1, 1, .x+1))),
-      DOB = mdy(paste(month(DOBMM, label=T), DOBDD, DOBYY)),
-      AGE_ASOF_DATE = ymd(paste0(meps_year, "1231")),
-      AGE_EXACT = (AGE_ASOF_DATE - ymd(DOB)) / dyears(1)) %>% 
-    select(-SEX, -DOBYY, -DOBMM, -DOBDD, -DOBDD_max) %>% 
+      DOB = mdy(paste(month(DOBMM, label=T), 15, DOBYY)),
+      AGE_ASOF_DATE = ymd(paste0(as.numeric(meps_year)+1, "0101")),
+      AGE_EXACT = (AGE_ASOF_DATE - ymd(DOB)) / dyears(1),
+      AGE_CURTATE = as.integer(AGE_EXACT)) %>% 
+    select(-SEX, -DOBYY, -DOBMM) %>% 
     select(-matches("^(PRI|MCR|MCD)(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)\\w{2}$"),
            -matches("^INS(JA|FE|MA|AP|MY|JU|JL|AU|SE|OC|NO|DE)YY$"),
            -matches("TOT\\w{3}YY"),
            -matches("RX\\w{3}YY"),
            -VARSTR, -VARPSU, -PERWTYYF) %>% 
-    rename(SEX=sex) %>% 
+    rename(SEX=sex)  %>% 
+    # Finally, apply age filter to try and remove any MCR benes not appropriate for the CNA RA model.
+    # This means we want only people who are exact age 65 or greater as of 1/1/YY, where YY is the 
+    # year equal to the payment year. To remove benes who are top-coded at age 85, we will also remove
+    # any individual explicitly older than 85 as of 1/1/YY. They could be 85, 88, 95, 106 - and this
+    # will reduce model performance.
+    filter(between(AGE_CURTATE, 65, 84)) %>% 
     write_csv("etc/outputs/demographics.csv")
   
   ## PREPARE DIAGNOSIS INFO
@@ -282,6 +313,7 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
   
   # Find members with ESRD so we can remove them from the CNA and NE models later
   esrd_individuals <- cond_datasets_proc %>% 
+    inner_join(ra_demos %>% distinct(DUPERSID, meps_year)) %>%  # Filter on eligible benes 
     filter(ICD10CDX == "N18") %>% 
     distinct(DUPERSID, meps_year) %>% 
     write_csv(here::here("etc/outputs/esrd_individuals.csv"))
@@ -321,9 +353,12 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
   hcc_icd_mappings <- read_csv("etc/hcc-icd-mappings.csv")  %>% 
     select(`Diagnosis\nCode`, `CMS-HCC\nModel\nCategory\nV24`, `CMS-HCC\nModel\nCategory\nV28`) %>% 
     rename(ICD10CM = `Diagnosis\nCode`) %>% 
-    mutate(CMS_HCC = if_any(2:3, ~ !is.na(.))) %>% 
+    mutate(CMS_HCC = as.integer(if_any(2:3, ~ !is.na(.)))) %>% 
     mutate(ICD10CDX = str_extract(ICD10CM, "^\\w{1}\\d{2}")) %>% 
-    filter(CMS_HCC == T) %>% 
+    group_by(ICD10CDX) %>% 
+    summarize(total = sum(CMS_HCC)) %>% 
+    ungroup() %>% 
+    mutate(CMS_HCC = total > 0) %>% 
     distinct(ICD10CDX, CMS_HCC)
   
   # Now we'll combine the icd10-cm frequency data with our conditions file
@@ -359,16 +394,18 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
   # of simulated DX codes based on the 3 digit truncation from MEPS, but we're not altering the probability of
   # sampling any HCC-related probabilities at the 3 digit ICD10 grouping level.
   conds_w_freqs_edited <- conds_w_freqs %>% 
-    inner_join(covered_by_mcr) %>%  # Limit this exercise to only MCR benes
     left_join(hcc_icd_mappings) %>% 
+    inner_join(ra_demos) %>% # Filtration join: Don't bother doing this for anyone who isn't at least close to our target pop
     replace_na(list(CMS_HCC = F)) %>% 
     filter(CMS_HCC | use_pct >= !!use_pct_thresh) %>% # Either it's a 3-digit ICD DX with associated HCC's or its got a sample prob over .05
     group_by(DUPERSID, meps_year, ICD10CDX, CMS_HCC) %>% 
     mutate(new_use_pct = use_pct / sum(use_pct)) %>% 
     ungroup() %>% 
     select(-use_pct) %>% 
-    rename(use_pct = new_use_pct)
-    
+    rename(use_pct = new_use_pct) 
+  
+
+  
   # Now do the primary processing, one individual at a time, getting
   # a risk score for every possible DX code configuration and associated probability
   # with that configuration
@@ -416,12 +453,12 @@ meps_prep <- function(n_dx_sim = 100, sim_only_hcc_dxcodes = F)
     mutate(profile_id = row_number(),
            id = str_c(DUPERSID, meps_year, profile_id, sep="-")) %>% 
     ungroup() %>% 
-    right_join(ra_demos) %>% 
+    right_join(ra_demos) %>%  # Limit this exercise to only the fully filtered target population, must be a right join or else we lose anyone without reported conditions
+    anti_join(esrd_individuals) %>%  # Remove this group too
     mutate(id = if_else(is.na(id), str_c(DUPERSID, meps_year, 1, sep="-"), id),
            probability = if_else(is.na(probability), 1, probability)) %>% 
     mutate(profile = map(DX_profile, function(x) { strsplit(x, ", ")[[1]] } )) %>% 
-    select(DUPERSID, meps_year, id, SEX, AGE_EXACT, profile, probability) %>% 
-    filter(!is.na(SEX)) 
+    select(DUPERSID, meps_year, id, SEX, AGE_EXACT, profile, probability)
   
   save(contingencies_to_run, file=here::here(paste0("etc/contingencies_n=",n_dx_sim,".rda")))
 }
