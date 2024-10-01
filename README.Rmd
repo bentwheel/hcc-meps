@@ -375,9 +375,11 @@ a2e_by_age_gender_NE.plot
 
 ```
 
-### New Enrollee Model - Predictive Ratios for Entire Population, by Total Cost Tertile
+### New Enrollee Model - Predictive Ratios for Entire Population, by Race & Ethnicity
 
-This isn't terrible performance, given that this is based on survey data. But risk adjuster models should be able to deliver accurate predictions for all slices and dices of the population. The accuracy of predictions breaks down rather quickly when we cut the data along groups that are irrelevant to the model (unlike as in the visualization in the previous section, where the score model's primary inputs are age and gender).
+This isn't terrible performance, given that this is based on survey data. But risk adjuster models should be able to deliver accurate predictions for all "slices and dices" of the population. The accuracy of predictions breaks down rather quickly when we cut the data along groups that are irrelevant to the model (unlike as in the visualization in the previous section, where the score model's primary inputs are age and gender).
+
+Since we're fortunate to be using MEPS data, we can cut the data on race and ethnicity for an interesting model performance evaluation.
 
 ```{r a2e_ne_race, echo=FALSE, fig.height=8.5, fig.width=11, message=FALSE, warning=FALSE}
 
@@ -593,6 +595,8 @@ a2e_by_age_gender_CNA.plot
 
 ...and that hope is confirmed by this plot, demonstrating that in almost every single age/gender category, the CMS-HCC CNA models outperform the NE models in producing accurate total cost projections!
 
+### Community non-dual aged model - Predictive Ratios for Entire Population, by Race & Ethnicity
+
 ```{r a2e_cna_race, echo=FALSE, fig.height=8.5, fig.width=11, message=FALSE, warning=FALSE}
 
 # Read in cost projections 
@@ -646,5 +650,5 @@ a2e_by_raceth_CNA.plot
 
 ```
 
-The CNA predictions by race and ethnicity are substantially improved over the predictions produced by the CMS-HCC NE model for both versions 24 and 28. 
+The CNA predictions by race and ethnicity are substantially improved over the predictions produced by the CMS-HCC NE model for the same cuts, for both versions 24 and 28. 
 

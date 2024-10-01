@@ -296,23 +296,27 @@ PMPM costs for each age band are, across all years evaluated.
 
 ![](README_files/figure-gfm/a2e_ne_age_gender-1.png)<!-- -->
 
-### New Enrollee Model - Predictive Ratios for Entire Population, by Total Cost Quintile
+### New Enrollee Model - Predictive Ratios for Entire Population, by Race & Ethnicity
 
 This isn’t terrible performance, given that this is based on survey
 data. But risk adjuster models should be able to deliver accurate
-predictions for all slices and dices of the population. The accuracy of
-predictions breaks down rather quickly when we cut the data along groups
-that are irrelevant to the model (unlike as in the visualization in the
-previous section, where the score model’s primary inputs are age and
-gender).
+predictions for all “slices and dices” of the population. The accuracy
+of predictions breaks down rather quickly when we cut the data along
+groups that are irrelevant to the model (unlike as in the visualization
+in the previous section, where the score model’s primary inputs are age
+and gender).
 
-![](README_files/figure-gfm/a2e_ne_risk-1.png)<!-- -->
+Since we’re fortunate to be using MEPS data, we can cut the data on race
+and ethnicity for an interesting model performance evaluation.
+
+![](README_files/figure-gfm/a2e_ne_race-1.png)<!-- -->
 
 The predictive accuracy here leaves much to be desired. Being able to
-predict which members will turn up in the upper deciles healthcare
-spending is an important part of opportunity analysis and proactive
-intervention / care management strategies. If that’s our objective this
-population, the NE model simply won’t do!
+predict member spending among diverse populations is an important
+primary objective of risk adjustment. For predictive modeling
+applications in healthcare, the NE just isn’t very useful outside of
+predicting expenditures for populations where diagnosis information is
+not available. Some information, after all, is better than none at all.
 
 Let’s see if using a risk score model with a higher R-squared value will
 get our predictions closer to the pin…
@@ -631,4 +635,10 @@ actual outcomes than the NE model predictions…
 every single age/gender category, the CMS-HCC CNA models outperform the
 NE models in producing accurate total cost projections!
 
-![](README_files/figure-gfm/a2e_cna_risk-1.png)<!-- -->
+### Community non-dual aged model - Predictive Ratios for Entire Population, by Race & Ethnicity
+
+![](README_files/figure-gfm/a2e_cna_race-1.png)<!-- -->
+
+The CNA predictions by race and ethnicity are substantially improved
+over the predictions produced by the CMS-HCC NE model for the same cuts,
+for both versions 24 and 28.
