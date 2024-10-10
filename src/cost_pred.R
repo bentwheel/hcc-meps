@@ -1,4 +1,3 @@
-#### Intro Housekeeping ####
 
 library(tidyverse)
 library(viridis)
