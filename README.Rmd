@@ -1,7 +1,7 @@
 ---
 title: "CMS-HCC on MEPS"
 author: C. Seth Lester, ASA, MAAA ([cslester@gmail.com](mailto:cslester@gmail.com)) <br>
-date: 29 September 2024 (non-final version)
+date: 29 September 2024 (preliminary release version)
 output: github_document
 always_allow_html: true
 ---
@@ -11,6 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Custom color pallette
 cp <- rev(c('#d73027','#fc8d59','#fee090','#ffffbf','#e0f3f8','#91bfdb','#4575b4'))
+
+source(here::here("src/cost_pred.R"))
 
 ```
 
