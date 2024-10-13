@@ -64,7 +64,7 @@ The CMS-HCC model implementation used to process respondents in this repository 
 
 ## If I don't care about the process, can I just download the risk scores for each member to use for my own MEPS analysis project?
 
-Sure, here's a zipfile of all the output generated from this repo, along with some very light documentation. Enjoy!
+Sure, [here's a zipfile](https://cslester.com/hcc-on-meps.zip) of all the output generated from this repo, along with some very light documentation. Enjoy!
 
 # Assessing CMS-HCC Model Performance on MEPS Data
 

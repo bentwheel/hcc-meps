@@ -1,7 +1,7 @@
 CMS-HCC on MEPS
 ================
 C. Seth Lester, ASA, MAAA (<cslester@gmail.com>) <br>
-29 September 2024 (nonfinal version)
+29 September 2024 (preliminary release version)
 
 # Project Overview
 
@@ -15,8 +15,8 @@ Healthcare risk adjustment models, such as the CMS-HCC risk adjustment
 model, are designed to take administrative healthcare claims data for
 the current year as inputs and produce individual-level risk scores as
 outputs. The risk score output for each individual processed by the
-CMS-HCC model is designed to be highly correlated with that individual’s
-total costs to the Medicare program in the subsequent year.
+CMS-HCC model is designed to be correlated with and predictive of that
+individual’s total costs to the Medicare program in the subsequent year.
 
 ## What is the CMS-HCC model used for?
 
@@ -45,18 +45,21 @@ is often used for other analytical purposes:
 - **Projecting Future Costs**: Organizations frequently apply the
   CMS-HCC model to claims data to project future costs, even when not
   directly tied to reimbursement. For example, a Medicare Advantage plan
-  might use these prospective risk scores to project costs for their
-  enrollee population in the coming year. *Vignette coming soon!*
+  might use these prospective risk scores alongside other known data
+  about their insured population to build predictive cost models for
+  their enrollee population(s) in the coming year. *Vignette coming
+  soon!*
 
-- **Controlling for Clinical Risk in Observational Studies**: The
-  CMS-HCC risk adjuster is also used in observational studies to control
-  for or quantify clinical risk differences between two populations,
-  such as treatment and control groups. Since the CMS-HCC model is
-  trained prospectively on costs incurred in the following year, it is
-  particularly useful for calculating average treatment effects in terms
-  of ROI or dollars saved by some program, intervention, or social
-  disparity experienced by the treatment population and not experienced
-  by the control population. *Vignette coming soon!*
+- **Controlling for Clinical Risk Differences Between Cohorts in
+  Observational Studies**: The CMS-HCC risk adjuster could also be used
+  in observational studies to control for or quantify clinical risk
+  differences between two populations, such as treatment and control
+  groups. Since the CMS-HCC model is trained prospectively on costs
+  incurred in the following year, it is particularly useful for
+  calculating average treatment effects in terms of ROI or dollars saved
+  by some program, intervention, or social disparity experienced by the
+  treatment population and not experienced by the control population.
+  *Vignette coming soon!*
 
 ## Why MEPS?
 
@@ -137,8 +140,9 @@ model](https://www.nber.org/research/data/risk-adjustment).
 
 ## If I don’t care about the process, can I just download the risk scores for each member to use for my own MEPS analysis project?
 
-Sure, here’s a zipfile of all the output generated from this repo, along
-with some very light documentation. Enjoy!
+Sure, [here’s a zipfile](https://cslester.com/hcc-on-meps.zip) of all
+the output generated from this repo, along with some very light
+documentation. Enjoy!
 
 # Assessing CMS-HCC Model Performance on MEPS Data
 
